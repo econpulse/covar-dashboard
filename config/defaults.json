@@ -1,0 +1,281 @@
+{
+  "protocol_version": 1,
+  "engine_version": "1.0.0",
+  "default_workbook_path": "Data.xlsx",
+  "supported_base_currencies": ["CHF", "EUR", "USD"],
+  "default_base_currency": "CHF",
+  "default_return_mode": "TOTAL",
+  "default_risk_model": "shrinkage_long",
+  "default_hedge_mode": "ASSET_CLASS",
+  "default_expectations_scenario": "base_5y",
+  "cash_proxy_config": {
+    "EUR": {
+      "allow_pre_1999_proxy": true,
+      "proxy_code": "ECWGM1M",
+      "proxy_type": "DEM_DEPOSIT_PROXY",
+      "proxy_until": "1998-12-31",
+      "proxy_description": "BD EU-MARK 1M Einlage vor 1999 als bewusst gewählter EUR-Cash-Proxy (vermutete DEM-Herkunft dokumentiert; ab 1999 EUR-Reihe)"
+    }
+  },
+  "fx_policy": {
+    "legacy_gbp_spot_code": "USSTBOE",
+    "preferred_gbp_spot_direction": "QUOTE_PER_FOREIGN",
+    "max_spot_forward_divergence": 0.15,
+    "block_missing_forwards_on_hedge": true,
+    "default_hedge_cost_bps_pa": 0
+  },
+  "risk_models": {
+    "sample_full": {
+      "id": "sample_full",
+      "label": "Sample-Kovarianz (Vollhistorie)",
+      "estimator": "SAMPLE",
+      "window_mode": "FULL",
+      "window_months": null,
+      "missing_mode": "COMPLETE_CASE",
+      "description": "Klassische Stichprobenkovarianz auf dem vollständigen gemeinsamen Zeitraum als Diagnosebenchmark."
+    },
+    "shrinkage_long": {
+      "id": "shrinkage_long",
+      "label": "Langfrist-Shrinkage (Vollhistorie)",
+      "estimator": "SHRINKAGE",
+      "shrinkage_target": "CONSTANT_CORRELATION",
+      "window_mode": "FULL",
+      "window_months": null,
+      "missing_mode": "COMPLETE_CASE",
+      "description": "Ledoit-Wolf-Shrinkage gegen konstante Korrelation auf der gemeinsamen Vollhistorie."
+    },
+    "shrinkage_120m": {
+      "id": "shrinkage_120m",
+      "label": "Mittelfrist-Shrinkage (120 Monate)",
+      "estimator": "SHRINKAGE",
+      "shrinkage_target": "CONSTANT_CORRELATION",
+      "window_mode": "ROLLING",
+      "window_months": 120,
+      "missing_mode": "COMPLETE_CASE",
+      "description": "Ledoit-Wolf-Shrinkage auf den letzten 120 Monaten."
+    },
+    "ewma_24m": {
+      "id": "ewma_24m",
+      "label": "EWMA (HWZ 24M, Fenster 120M)",
+      "estimator": "EWMA",
+      "halflife_months": 24,
+      "window_mode": "ROLLING",
+      "window_months": 120,
+      "regularization_gamma": 0.05,
+      "missing_mode": "COMPLETE_CASE",
+      "description": "Exponentiell gewichtete Kovarianz (Halbwertszeit 24 Monate, max. 120 Monate) mit dokumentierter Diagonal-Regularisierung (5%)."
+    },
+    "factor_completed": {
+      "id": "factor_completed",
+      "label": "Faktor-Momentenmodell (Kurze Historien)",
+      "estimator": "FACTOR_COMPLETED",
+      "shrinkage_target": "CONSTANT_CORRELATION",
+      "window_mode": "FULL",
+      "window_months": null,
+      "missing_mode": "FACTOR_RECONSTRUCTION",
+      "description": "Direkte gemeinsame Faktor-Momentenschätzung für kürzere Zeitreihen auf Basis wirtschaftlich zulässiger Langfrist-Donoren unter Erhalt der PSD-Struktur."
+    },
+    "crisis_stress": {
+      "id": "crisis_stress",
+      "label": "Stress-Kovarianz (Beobachtete Krisenfenster)",
+      "estimator": "CRISIS_STRESS",
+      "window_mode": "CRISIS",
+      "window_months": 60,
+      "regularization_gamma": 0.05,
+      "missing_mode": "COMPLETE_CASE",
+      "description": "PSD-konsistente Kovarianzmatrix über die historisch volatilsten Stressmonate des gemeinsamen Zeitraums."
+    }
+  },
+  "portfolio_templates": {
+    "saa_25": {
+      "id": "saa_25",
+      "name": "SAA 25 (Konservativ - 25% Aktien)",
+      "equity_profile": 0.25,
+      "weights": {
+        "MSSWITL(RI)": 0.10,
+        "MSUSAM$(RI)": 0.08,
+        "MSEMUIL(RI)": 0.03,
+        "TOKYOSE(RI)": 0.02,
+        "MSEMKF$(RI)": 0.02,
+        "BMSW10Y(RI)": 0.30,
+        "SPCHICC(RI)": 0.20,
+        "BMUS10Y(RI)": 0.10,
+        "SWZKBIM(RI)": 0.10,
+        "GSGCTOT": 0.03,
+        "DJUBSTR": 0.02
+      }
+    },
+    "saa_50": {
+      "id": "saa_50",
+      "name": "SAA 50 (Ausgewogen - 50% Aktien)",
+      "equity_profile": 0.50,
+      "weights": {
+        "MSSWITL(RI)": 0.18,
+        "MSUSAM$(RI)": 0.16,
+        "MSEMUIL(RI)": 0.06,
+        "TOKYOSE(RI)": 0.04,
+        "MSEMKF$(RI)": 0.06,
+        "BMSW10Y(RI)": 0.16,
+        "SPCHICC(RI)": 0.10,
+        "BMUS10Y(RI)": 0.08,
+        "SWZKBIM(RI)": 0.10,
+        "GSGCTOT": 0.04,
+        "DJUBSTR": 0.02
+      }
+    },
+    "saa_75": {
+      "id": "saa_75",
+      "name": "SAA 75 (Wachstum - 75% Aktien)",
+      "equity_profile": 0.75,
+      "weights": {
+        "MSSWITL(RI)": 0.26,
+        "MSUSAM$(RI)": 0.25,
+        "MSEMUIL(RI)": 0.09,
+        "TOKYOSE(RI)": 0.06,
+        "MSEMKF$(RI)": 0.09,
+        "BMSW10Y(RI)": 0.05,
+        "SPCHICC(RI)": 0.05,
+        "BMUS10Y(RI)": 0.03,
+        "SWZKBIM(RI)": 0.07,
+        "GSGCTOT": 0.03,
+        "DJUBSTR": 0.02
+      }
+    }
+  },
+  "default_hedge_configs": {
+    "ASSET_CLASS": {
+      "mode": "ASSET_CLASS",
+      "class_ratios": {
+        "EQUITY": 0.0,
+        "BOND": 1.0,
+        "REAL_ESTATE": 0.0,
+        "GOLD": 0.0,
+        "COMMODITY": 0.0
+      },
+      "asset_overrides": {}
+    },
+    "CURRENCY_OVERLAY": {
+      "mode": "CURRENCY_OVERLAY",
+      "currency_ratios": {
+        "CHF": 0.0,
+        "EUR": 0.5,
+        "USD": 0.5,
+        "GBP": 0.5,
+        "JPY": 0.0
+      }
+    }
+  },
+  "default_expectations": {
+    "expectations_id": "lukb_cma_2026q4",
+    "as_of": "2026-09-30",
+    "horizon": 5,
+    "rebalancing_rule": "ANNUAL_REBALANCED",
+    "fee_basis": "GROSS_INDEX_BEFORE_IMPL_COSTS",
+    "return_definition": "GEOMETRIC_5Y_BUILDING_BLOCKS",
+    "uncertainty_description": "Deterministische 5-Jahres-Szenariopfade (keine stochastischen Verlustquantole ohne gemeinsames Pfadmodell).",
+    "scenarios": {
+      "base_5y": {
+        "scenario_id": "base_5y",
+        "label": "Basisszenario (5J CMA)",
+        "description": "Zukunftsgerichtete 5-Jahres-Renditebausteine (p.a.) unter Kaufkraftparitäts-/Zinsparitäts-Pfadannahmen.",
+        "usd_numeraire_paths": {
+          "USD": [1.0, 1.0, 1.0, 1.0, 1.0],
+          "CHF": [1.012, 1.012, 1.010, 1.010, 1.010],
+          "EUR": [1.004, 1.004, 1.005, 1.005, 1.005],
+          "GBP": [0.998, 1.000, 1.000, 1.000, 1.000],
+          "JPY": [1.018, 1.018, 1.015, 1.015, 1.012]
+        },
+        "short_rates_pa": {
+          "USD": [0.036, 0.034, 0.032, 0.032, 0.032],
+          "CHF": [0.008, 0.009, 0.010, 0.010, 0.010],
+          "EUR": [0.022, 0.022, 0.022, 0.022, 0.022],
+          "GBP": [0.035, 0.033, 0.032, 0.032, 0.032],
+          "JPY": [0.006, 0.008, 0.010, 0.010, 0.010]
+        },
+        "asset_assumptions": {
+          "MSSWITL(RI)": { "model_currency": "CHF", "annual_local_returns": [0.052, 0.054, 0.055, 0.055, 0.055], "return_structure": "EQUITY_TR" },
+          "MSUSAM$(RI)": { "model_currency": "USD", "annual_local_returns": [0.068, 0.070, 0.070, 0.072, 0.072], "return_structure": "EQUITY_TR" },
+          "MSEMUIL(RI)": { "model_currency": "EUR", "annual_local_returns": [0.062, 0.064, 0.065, 0.065, 0.065], "return_structure": "EQUITY_TR" },
+          "TOKYOSE(RI)": { "model_currency": "JPY", "annual_local_returns": [0.050, 0.052, 0.052, 0.054, 0.054], "return_structure": "EQUITY_TR" },
+          "MSEMKF$(RI)": { "model_currency": "USD", "annual_local_returns": [0.078, 0.080, 0.082, 0.082, 0.082], "return_structure": "EQUITY_TR" },
+          "BMSW10Y(RI)": { "model_currency": "CHF", "annual_local_returns": [0.014, 0.015, 0.016, 0.016, 0.016], "return_structure": "BOND_TR" },
+          "SPCHICC(RI)": { "model_currency": "CHF", "annual_local_returns": [0.021, 0.022, 0.023, 0.023, 0.023], "return_structure": "BOND_TR" },
+          "BMUS10Y(RI)": { "model_currency": "USD", "annual_local_returns": [0.041, 0.042, 0.042, 0.042, 0.042], "return_structure": "BOND_TR" },
+          "SWZKBIM(RI)": { "model_currency": "CHF", "annual_local_returns": [0.036, 0.038, 0.038, 0.038, 0.038], "return_structure": "LISTED_FUND_TR" },
+          "GSGCTOT":     { "model_currency": "USD", "annual_local_returns": [0.045, 0.045, 0.045, 0.045, 0.045], "return_structure": "FUTURES_TR" },
+          "DJUBSTR":     { "model_currency": "USD", "annual_local_returns": [0.042, 0.042, 0.042, 0.042, 0.042], "return_structure": "FUTURES_TR" },
+          "SWISSMI(RI)": { "model_currency": "CHF", "annual_local_returns": [0.051, 0.053, 0.054, 0.054, 0.054], "return_structure": "EQUITY_TR" },
+          "SWSPIXD":     { "model_currency": "CHF", "annual_local_returns": [0.024, 0.025, 0.026, 0.026, 0.026], "return_structure": "EQUITY_TR" }
+        }
+      },
+      "stagflation_5y": {
+        "scenario_id": "stagflation_5y",
+        "label": "Stagflation / Zinsdruck (5J)",
+        "description": "Höhere Inflation, schwächere Aktien- und Anleihenrenditen, positive Rohstoff-/Gold-Futures-Beiträge.",
+        "usd_numeraire_paths": {
+          "USD": [1.0, 1.0, 1.0, 1.0, 1.0],
+          "CHF": [1.025, 1.020, 1.015, 1.015, 1.015],
+          "EUR": [0.990, 0.995, 1.000, 1.000, 1.000],
+          "GBP": [0.985, 0.990, 0.995, 1.000, 1.000],
+          "JPY": [1.010, 1.010, 1.010, 1.010, 1.010]
+        },
+        "short_rates_pa": {
+          "USD": [0.048, 0.050, 0.046, 0.042, 0.040],
+          "CHF": [0.015, 0.018, 0.016, 0.015, 0.015],
+          "EUR": [0.032, 0.034, 0.032, 0.030, 0.030],
+          "GBP": [0.046, 0.048, 0.045, 0.042, 0.040],
+          "JPY": [0.012, 0.015, 0.015, 0.015, 0.015]
+        },
+        "asset_assumptions": {
+          "MSSWITL(RI)": { "model_currency": "CHF", "annual_local_returns": [-0.040, 0.015, 0.035, 0.045, 0.045], "return_structure": "EQUITY_TR" },
+          "MSUSAM$(RI)": { "model_currency": "USD", "annual_local_returns": [-0.060, 0.020, 0.045, 0.055, 0.060], "return_structure": "EQUITY_TR" },
+          "MSEMUIL(RI)": { "model_currency": "EUR", "annual_local_returns": [-0.055, 0.015, 0.040, 0.050, 0.050], "return_structure": "EQUITY_TR" },
+          "TOKYOSE(RI)": { "model_currency": "JPY", "annual_local_returns": [-0.030, 0.020, 0.035, 0.040, 0.045], "return_structure": "EQUITY_TR" },
+          "MSEMKF$(RI)": { "model_currency": "USD", "annual_local_returns": [-0.070, 0.025, 0.055, 0.065, 0.070], "return_structure": "EQUITY_TR" },
+          "BMSW10Y(RI)": { "model_currency": "CHF", "annual_local_returns": [-0.025, 0.005, 0.015, 0.018, 0.020], "return_structure": "BOND_TR" },
+          "SPCHICC(RI)": { "model_currency": "CHF", "annual_local_returns": [-0.020, 0.010, 0.020, 0.024, 0.025], "return_structure": "BOND_TR" },
+          "BMUS10Y(RI)": { "model_currency": "USD", "annual_local_returns": [-0.035, 0.015, 0.035, 0.042, 0.045], "return_structure": "BOND_TR" },
+          "SWZKBIM(RI)": { "model_currency": "CHF", "annual_local_returns": [-0.015, 0.020, 0.030, 0.035, 0.035], "return_structure": "LISTED_FUND_TR" },
+          "GSGCTOT":     { "model_currency": "USD", "annual_local_returns": [0.110, 0.075, 0.055, 0.045, 0.045], "return_structure": "FUTURES_TR" },
+          "DJUBSTR":     { "model_currency": "USD", "annual_local_returns": [0.095, 0.065, 0.050, 0.045, 0.045], "return_structure": "FUTURES_TR" },
+          "SWISSMI(RI)": { "model_currency": "CHF", "annual_local_returns": [-0.038, 0.015, 0.035, 0.045, 0.045], "return_structure": "EQUITY_TR" },
+          "SWSPIXD":     { "model_currency": "CHF", "annual_local_returns": [-0.065, -0.010, 0.010, 0.020, 0.020], "return_structure": "EQUITY_TR" }
+        }
+      },
+      "disinflation_boom_5y": {
+        "scenario_id": "disinflation_boom_5y",
+        "label": "Produktivitäts-/Disinflationsboom (5J)",
+        "description": "Sinkende Zinsen, überdurchschnittliche globale Aktienrenditen und freundliche Anleihenmärkte.",
+        "usd_numeraire_paths": {
+          "USD": [1.0, 1.0, 1.0, 1.0, 1.0],
+          "CHF": [1.005, 1.005, 1.008, 1.008, 1.008],
+          "EUR": [1.008, 1.008, 1.006, 1.005, 1.005],
+          "GBP": [1.005, 1.005, 1.004, 1.002, 1.002],
+          "JPY": [1.022, 1.020, 1.015, 1.012, 1.010]
+        },
+        "short_rates_pa": {
+          "USD": [0.028, 0.025, 0.025, 0.025, 0.025],
+          "CHF": [0.005, 0.005, 0.006, 0.006, 0.006],
+          "EUR": [0.016, 0.016, 0.018, 0.018, 0.018],
+          "GBP": [0.026, 0.025, 0.025, 0.025, 0.025],
+          "JPY": [0.005, 0.006, 0.008, 0.008, 0.008]
+        },
+        "asset_assumptions": {
+          "MSSWITL(RI)": { "model_currency": "CHF", "annual_local_returns": [0.075, 0.072, 0.068, 0.065, 0.062], "return_structure": "EQUITY_TR" },
+          "MSUSAM$(RI)": { "model_currency": "USD", "annual_local_returns": [0.095, 0.090, 0.085, 0.080, 0.078], "return_structure": "EQUITY_TR" },
+          "MSEMUIL(RI)": { "model_currency": "EUR", "annual_local_returns": [0.085, 0.080, 0.075, 0.072, 0.070], "return_structure": "EQUITY_TR" },
+          "TOKYOSE(RI)": { "model_currency": "JPY", "annual_local_returns": [0.072, 0.068, 0.065, 0.060, 0.058], "return_structure": "EQUITY_TR" },
+          "MSEMKF$(RI)": { "model_currency": "USD", "annual_local_returns": [0.105, 0.100, 0.092, 0.088, 0.085], "return_structure": "EQUITY_TR" },
+          "BMSW10Y(RI)": { "model_currency": "CHF", "annual_local_returns": [0.025, 0.020, 0.018, 0.016, 0.016], "return_structure": "BOND_TR" },
+          "SPCHICC(RI)": { "model_currency": "CHF", "annual_local_returns": [0.032, 0.028, 0.025, 0.024, 0.024], "return_structure": "BOND_TR" },
+          "BMUS10Y(RI)": { "model_currency": "USD", "annual_local_returns": [0.058, 0.048, 0.042, 0.040, 0.040], "return_structure": "BOND_TR" },
+          "SWZKBIM(RI)": { "model_currency": "CHF", "annual_local_returns": [0.050, 0.045, 0.042, 0.040, 0.040], "return_structure": "LISTED_FUND_TR" },
+          "GSGCTOT":     { "model_currency": "USD", "annual_local_returns": [0.025, 0.030, 0.032, 0.035, 0.035], "return_structure": "FUTURES_TR" },
+          "DJUBSTR":     { "model_currency": "USD", "annual_local_returns": [0.020, 0.028, 0.030, 0.032, 0.032], "return_structure": "FUTURES_TR" },
+          "SWISSMI(RI)": { "model_currency": "CHF", "annual_local_returns": [0.074, 0.070, 0.066, 0.064, 0.060], "return_structure": "EQUITY_TR" },
+          "SWSPIXD":     { "model_currency": "CHF", "annual_local_returns": [0.045, 0.042, 0.038, 0.035, 0.032], "return_structure": "EQUITY_TR" }
+        }
+      }
+    }
+  }
+}

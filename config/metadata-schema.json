@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConsolidatedMetadataSchema",
+  "version": "1.0.0",
+  "required_columns": [
+    "Code",
+    "Name",
+    "Series_Type",
+    "Value_Unit",
+    "Active",
+    "Review_Status",
+    "Asset_Class",
+    "Sub_Asset_Class",
+    "Region",
+    "Return_Currency",
+    "FX_Exposure",
+    "Hedge_Allowed",
+    "Default_Hedge_Ratio",
+    "TR_Convention",
+    "Already_Hedged",
+    "Existing_Hedge_Currency",
+    "Return_Structure",
+    "Foreign_Currency",
+    "Quote_Currency",
+    "Quote_Direction",
+    "Quote_Scale",
+    "Forward_Type",
+    "Points_Multiplier",
+    "Tenor",
+    "Cash_Currency",
+    "Rate_Convention",
+    "Day_Count",
+    "Spot_Reference_Code",
+    "Source",
+    "Notes"
+  ],
+  "optional_versioned_columns": [
+    "Proxy_Type",
+    "Proxy_Until",
+    "Proxy_Description"
+  ],
+  "enums": {
+    "Series_Type": ["ASSET_TR", "FX_SPOT", "FX_FORWARD", "CASH_RATE"],
+    "Value_Unit": ["INDEX_POINTS", "OUTRIGHT", "POINTS", "PERCENT_PA"],
+    "Asset_Class": ["EQUITY", "BOND", "REAL_ESTATE", "GOLD", "COMMODITY", "CASH", "ALTERNATIVE"],
+    "Quote_Direction": ["FOREIGN_PER_QUOTE", "QUOTE_PER_FOREIGN"],
+    "Forward_Type": ["OUTRIGHT", "POINTS"],
+    "Return_Structure": ["EQUITY_TR", "BOND_TR", "LISTED_FUND_TR", "FUTURES_TR", "PHYSICAL_TR", "PRICE_INDEX"]
+  }
+}

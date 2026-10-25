@@ -1,0 +1,90 @@
+/* ==========================================================================
+   www/css/tokens.css
+   Design Tokens for Multi-Asset Portfolio Studio (Institutional Swiss UI)
+   No Bootstrap, no heavy decorative effects, WCAG AA contrast compliant
+   ========================================================================== */
+
+:root {
+  /* Color Palette - Neutral Slate & Institutional Navy/Teal */
+  --bg-app: #f4f6f9;
+  --bg-surface: #ffffff;
+  --bg-surface-alt: #f8fafc;
+  --bg-surface-hover: #f1f5f9;
+  --bg-sidebar: #0f172a;
+  --bg-sidebar-hover: #1e293b;
+  --bg-sidebar-active: #1d4ed8;
+  --bg-header: #ffffff;
+
+  /* Text Colors */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-on-dark: #f8fafc;
+  --text-on-dark-muted: #94a3b8;
+
+  /* Brand & Semantic Accents */
+  --accent-primary: #1d4ed8;
+  --accent-primary-hover: #1e40af;
+  --accent-primary-soft: #eff6ff;
+  --accent-secondary: #0f766e;
+  --accent-secondary-soft: #f0fdfa;
+
+  /* Status Colors */
+  --status-ok-bg: #dcfce7;
+  --status-ok-text: #166534;
+  --status-ok-border: #86efac;
+
+  --status-dirty-bg: #fef9c3;
+  --status-dirty-text: #854d0e;
+  --status-dirty-border: #fde047;
+
+  --status-running-bg: #dbeafe;
+  --status-running-text: #1e40af;
+  --status-running-border: #93c5fd;
+
+  --status-stale-bg: #ffedd5;
+  --status-stale-text: #9a3412;
+  --status-stale-border: #fdba74;
+
+  --status-error-bg: #fee2e2;
+  --status-error-text: #991b1b;
+  --status-error-border: #fca5a5;
+
+  --status-neutral-bg: #e2e8f0;
+  --status-neutral-text: #334155;
+  --status-neutral-border: #cbd5e1;
+
+  /* Borders & Dividers */
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --focus-ring: 0 0 0 2px #ffffff, 0 0 0 4px #1d4ed8;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --text-xs: 0.75rem;    /* 12px */
+  --text-sm: 0.8125rem;  /* 13px */
+  --text-base: 0.875rem; /* 14px */
+  --text-md: 0.9375rem;  /* 15px */
+  --text-lg: 1.0625rem;  /* 17px */
+  --text-xl: 1.25rem;    /* 20px */
+  --text-2xl: 1.5rem;    /* 24px */
+
+  /* Spacing & Layout */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --sidebar-width: 236px;
+  --context-bar-height: 62px;
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+}

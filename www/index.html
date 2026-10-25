@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Multi-Asset Portfolio Studio</title>
+  {{ headContent() }}
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="vendor/echarts.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Left Compact Institutional Navigation -->
+    <aside class="app-sidebar" aria-label="Hauptnavigation">
+      <div class="brand-header">
+        <h1 class="brand-title">Multi-Asset Studio</h1>
+        <div class="brand-subtitle">SAA · FX Hedge · Covar Engine</div>
+      </div>
+
+      <ul class="nav-list" role="list">
+        <li>
+          <button type="button" class="nav-btn active" data-tab="portfolio" aria-current="page">
+            <span>1. Portfolio &amp; SAA</span>
+            <span class="nav-step-badge">w</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="nav-btn" data-tab="currencies">
+            <span>2. Währungen &amp; Hedge</span>
+            <span class="nav-step-badge">FX</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="nav-btn" data-tab="risk">
+            <span>3. Risiko &amp; Kovarianz</span>
+            <span class="nav-step-badge">&Sigma;</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="nav-btn" data-tab="returns">
+            <span>4. Rendite (5J CMA)</span>
+            <span class="nav-step-badge">5Y</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="nav-btn" data-tab="comparison">
+            <span>5. SAA-Vergleich &amp; TE</span>
+            <span class="nav-step-badge">&Delta;</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="nav-btn" data-tab="data">
+            <span>6. Daten &amp; Methodik</span>
+            <span class="nav-step-badge">QA</span>
+          </button>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div class="conn-indicator">
+          <span id="conn_dot" class="conn-dot" aria-hidden="true"></span>
+          <span id="conn_text">Verbinde mit Shiny …</span>
+        </div>
+        <div>Referenz-Engine: R 4.5 · Protokoll v1</div>
+      </div>
+    </aside>
+
+    <!-- Main Right Area -->
+    <main class="app-main">
+      <!-- Persistent Top Context Bar -->
+      <header class="context-bar" aria-label="Aktiver Analyse-Kontext">
+        <div class="context-items">
+          <div class="context-pill">
+            <span class="context-label">Basiswährung</span>
+            <div class="segmented-control" role="group" aria-label="Basiswährung wählen">
+              <button type="button" class="seg-btn active" data-base-ccy="CHF" aria-pressed="true">CHF</button>
+              <button type="button" class="seg-btn" data-base-ccy="EUR" aria-pressed="false">EUR</button>
+              <button type="button" class="seg-btn" data-base-ccy="USD" aria-pressed="false">USD</button>
+            </div>
+          </div>
+
+          <div class="context-divider" aria-hidden="true"></div>
+
+          <div class="context-pill">
+            <span class="context-label">Portfolio / SAA</span>
+            <span id="ctx_portfolio_name" class="context-value">SAA 50</span>
+          </div>
+
+          <div class="context-divider" aria-hidden="true"></div>
+
+          <div class="context-pill">
+            <span class="context-label">Risikomodell</span>
+            <span id="ctx_risk_model" class="context-value">Langfrist-Shrinkage</span>
+          </div>
+
+          <div class="context-divider" aria-hidden="true"></div>
+
+          <div class="context-pill">
+            <span class="context-label">5J-Renditeszenario</span>
+            <span id="ctx_scenario_name" class="context-value">Basisszenario (5J CMA)</span>
+          </div>
+
+          <div class="context-divider" aria-hidden="true"></div>
+
+          <div class="context-pill">
+            <span class="context-label">Stichtag / Sample</span>
+            <span id="ctx_as_of" class="context-value">-</span>
+          </div>
+
+          <div class="context-divider" aria-hidden="true"></div>
+
+          <div class="context-pill">
+            <span class="context-label">Konfig-Hash</span>
+            <span id="ctx_config_hash" class="context-value" style="font-family: var(--font-mono);">-</span>
+          </div>
+        </div>
+
+        <div>
+          <span id="ctx_state_badge" class="state-badge state-uncalculated" role="status" aria-live="polite">
+            Nicht berechnet
+          </span>
+        </div>
+      </header>
+
+      <!-- Structured Alert / Warning Strip -->
+      <section id="alert_strip" class="alert-strip" aria-label="Fachliche Hinweise und Warnungen"></section>
+
+      <!-- Scrollable Workspaces -->
+      <div class="workspace-container">
+        <!-- ================================================================
+             WORKSPACE 1: PORTFOLIO & SAA EDITOR
+             ================================================================ -->
+        <section id="panel_portfolio" class="workspace-panel active" aria-label="Portfolio und SAA Editor">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Portfoliovolatilität p.a. (mit Hedge)</div>
+              <div id="kpi_port_vol" class="kpi-value">-</div>
+              <div id="kpi_port_vol_sub" class="kpi-sub">12×Sigma Monatskonvention</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Volatilität ungesichert p.a.</div>
+              <div id="kpi_port_unh_vol" class="kpi-value">-</div>
+              <div id="kpi_port_unh_vol_sub" class="kpi-sub">Hedge-Effekt: -</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Summe Kapitalgewichte &Sigma;w</div>
+              <div id="kpi_port_wsum" class="kpi-value">100.0 %</div>
+              <div id="kpi_port_wsum_sub" class="kpi-sub">Hedge-Nominal g separat geführt</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Aktienquote / Fremdwährung</div>
+              <div id="kpi_port_equity" class="kpi-value">-</div>
+              <div id="kpi_port_equity_sub" class="kpi-sub">-</div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Strategische Asset-Allokation (SAA) &amp; Kapitalgewichte</h2>
+                <div class="panel-subtitle">
+                  Profilvorlagen (25 / 50 / 75 % Aktien) oder freie Gewichtssteuerung. Gewichtsänderungen projizieren sofort auf der gecachten Risikomatrix &Sigma;<sub>B</sub> ohne Neuschätzung.
+                </div>
+              </div>
+              <div class="btn-toolbar">
+                <label for="select_active_portfolio" class="context-label">Aktive SAA:</label>
+                <select id="select_active_portfolio" class="form-select">
+                  <option value="saa_25">SAA 25 (Konservativ - 25% Aktien)</option>
+                  <option value="saa_50" selected>SAA 50 (Ausgewogen - 50% Aktien)</option>
+                  <option value="saa_75">SAA 75 (Wachstum - 75% Aktien)</option>
+                </select>
+                <button type="button" class="btn" data-profile-saa="saa_25">Vorlage 25%</button>
+                <button type="button" class="btn" data-profile-saa="saa_50">Vorlage 50%</button>
+                <button type="button" class="btn" data-profile-saa="saa_75">Vorlage 75%</button>
+                <button type="button" id="btn_normalize_weights" class="btn btn-primary">Auf 100% normieren</button>
+              </div>
+            </div>
+            <div class="panel-body no-pad table-scroll">
+              <table class="data-table" aria-label="Kapitalgewichte und Risikobeiträge">
+                <thead>
+                  <tr>
+                    <th class="sticky-col">Code</th>
+                    <th>Asset-Bezeichnung</th>
+                    <th>Assetklasse</th>
+                    <th>FX-Exposure</th>
+                    <th class="num">Kapitalgewicht w (%)</th>
+                    <th class="num">Eff. Hedge h</th>
+                    <th class="num">Hedge-Nominal g</th>
+                    <th class="num">Volatilität p.a.</th>
+                    <th class="num">Risikobeitrag p.a.</th>
+                    <th class="num">Anteil Risiko</th>
+                  </tr>
+                </thead>
+                <tbody id="portfolio_weights_tbody"></tbody>
+                <tfoot id="portfolio_weights_tfoot"></tfoot>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-equal">
+            <div class="panel-card">
+              <div class="panel-header">
+                <h3 class="panel-title">Kapitalgewichte vs. Netto-Währungsexposure nach Hedge</h3>
+              </div>
+              <div class="panel-body">
+                <div id="chart_portfolio_weights" class="chart-box"></div>
+              </div>
+            </div>
+            <div class="panel-card">
+              <div class="panel-header">
+                <div>
+                  <h3 class="panel-title">Realisierter historischer Modellpfad (Index = 100)</h3>
+                  <div class="panel-subtitle">Monatliches Rebalancing im gemeinsamen Stützzeitraum (nur historische Diagnose)</div>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="chart_historical_path" class="chart-box"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             WORKSPACE 2: CURRENCIES & HEDGE ENGINE
+             ================================================================ -->
+        <section id="panel_currencies" class="workspace-panel" aria-label="Währungen und Hedge-Engine">
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Exklusiver Hedge-Eingabemodus &amp; Währungs-Exposures</h2>
+                <div id="hedge_attribution_note" class="panel-subtitle"></div>
+              </div>
+              <div class="btn-toolbar">
+                <span class="context-label">Eingabemodus:</span>
+                <div class="segmented-control" role="group" aria-label="Hedge-Modus wählen">
+                  <button type="button" id="btn_hedge_mode_class" class="seg-btn active">1. ASSET_CLASS (Klassen-Hedge)</button>
+                  <button type="button" id="btn_hedge_mode_overlay" class="seg-btn">2. CURRENCY_OVERLAY (Währungs-Overlay)</button>
+                </div>
+                <label for="select_hedge_return_policy" class="context-label">Rückwechsel-Regel:</label>
+                <select id="select_hedge_return_policy" class="form-select">
+                  <option value="RESTORE_SAVED" selected>Ursprüngliche Klassenkonfiguration wiederherstellen</option>
+                  <option value="PROPORTIONAL">Proportionale Zuordnung aus Overlay übernehmen</option>
+                </select>
+                <label for="input_hedge_cost_bps" class="context-label">Hedge-Kosten (bps p.a.):</label>
+                <input type="number" id="input_hedge_cost_bps" class="form-control num-input" value="0" min="0" max="200" step="5" />
+              </div>
+            </div>
+            <div class="panel-body no-pad table-scroll">
+              <table class="data-table" aria-label="Zentrale Währungs-Exposure-Tabelle">
+                <thead>
+                  <tr>
+                    <th class="sticky-col">Währung / Exposure</th>
+                    <th class="num">Exposure vor Hedge E<sub>vor</sub></th>
+                    <th class="num">Hedgefähiger Anteil</th>
+                    <th class="num">Nicht hedgefähig / Gesperrt</th>
+                    <th class="num">Hedgequote h</th>
+                    <th class="num">Hedge-Nominal g</th>
+                    <th class="num">Exposure nach Hedge E<sub>nach</sub></th>
+                    <th>Verfügbarkeit / Status</th>
+                  </tr>
+                </thead>
+                <tbody id="currency_exposure_tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-2col">
+            <div class="panel-card">
+              <div class="panel-header">
+                <div>
+                  <h3 class="panel-title">Hedge-Steuerung nach Assetklasse</h3>
+                  <div class="panel-subtitle">Inland, EMEQ und Währungen ohne 1M-Forward (JPY) sind automatisch ausgenommen</div>
+                </div>
+              </div>
+              <div class="panel-body no-pad table-scroll">
+                <table class="data-table" aria-label="Assetklassen-Hedgequoten">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">Assetklasse</th>
+                      <th class="num">Gesamtgewicht</th>
+                      <th class="num">Davon hedgefähig</th>
+                      <th class="num">Klassen-Hedgequote h</th>
+                      <th class="num">Hedge-Nominal g</th>
+                    </tr>
+                  </thead>
+                  <tbody id="asset_class_hedge_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="panel-header">
+                <h3 class="panel-title">Währungs-Exposure vor vs. nach Absicherung</h3>
+              </div>
+              <div class="panel-body">
+                <div id="chart_currency_exposures" class="chart-box"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             WORKSPACE 3: RISK & COVARIANCE DIAGNOSTICS
+             ================================================================ -->
+        <section id="panel_risk" class="workspace-panel" aria-label="Risikomodelle und Kovarianz-Diagnostik">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Aktiver Schätzer</div>
+              <div id="risk_diag_estimator" class="kpi-value" style="font-size: var(--text-md);">-</div>
+              <div class="kpi-sub">Gemeinsame Basis X<sub>B</sub> = [u, z]</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Stützzeitraum &amp; Beobachtungen</div>
+              <div id="risk_diag_sample" class="kpi-value" style="font-size: var(--text-md);">-</div>
+              <div class="kpi-sub">Monatliche Renditen</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Shrinkage / Regularisierung</div>
+              <div id="risk_diag_shrinkage" class="kpi-value" style="font-size: var(--text-md);">-</div>
+              <div class="kpi-sub">Explizites Shrinkage-Target</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">PSD &amp; Konditionszahl</div>
+              <div id="risk_diag_psd" class="kpi-value" style="font-size: var(--text-md);">-</div>
+              <div class="kpi-sub">Eigenwertspektrum geprüft</div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Risikomodell-Konfiguration &amp; Komponenten-Risikobeiträge</h2>
+                <div class="panel-subtitle">Negative Risikobeiträge diversifizierender Hedge- oder Anleihenkomponenten bleiben unverfälscht erhalten</div>
+              </div>
+              <div class="btn-toolbar">
+                <label for="select_risk_model" class="context-label">Risikomodell:</label>
+                <select id="select_risk_model" class="form-select">
+                  <option value="sample_full">Sample-Kovarianz (Vollhistorie - Benchmark)</option>
+                  <option value="shrinkage_long" selected>Langfrist-Shrinkage (Vollhistorie)</option>
+                  <option value="shrinkage_120m">Mittelfrist-Shrinkage (120 Monate)</option>
+                  <option value="ewma_24m">EWMA (HWZ 24M, max. 120M)</option>
+                  <option value="factor_completed">Faktor-Momentenmodell (Kurze Historien)</option>
+                  <option value="crisis_stress">Stress-Kovarianz (Beobachtete Krisenfenster)</option>
+                </select>
+                <label for="select_return_mode" class="context-label">Renditebasis:</label>
+                <select id="select_return_mode" class="form-select">
+                  <option value="TOTAL" selected>Total Return (Standard)</option>
+                  <option value="EXCESS">Excess Return über Basis-Cash (einmaliger Abzug)</option>
+                </select>
+                <label for="select_risk_decomp_level" class="context-label">Zerlegung:</label>
+                <select id="select_risk_decomp_level" class="form-select">
+                  <option value="ASSET" selected>Nach Asset inkl. Hedge A(h)&Sigma;A(h)'</option>
+                  <option value="COMPONENT">Nach Rohkomponente [u_i, z_c]</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid-2col" style="padding: var(--space-4);">
+              <div class="table-scroll">
+                <table class="data-table" aria-label="Risikobeiträge">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">ID / Code</th>
+                      <th>Bezeichnung / Typ</th>
+                      <th class="num">Exposure a</th>
+                      <th class="num">Standalone Vol p.a.</th>
+                      <th class="num">Marginal Risk</th>
+                      <th class="num">Risikobeitrag p.a.</th>
+                      <th class="num">Anteil (%)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="risk_contributions_tbody"></tbody>
+                </table>
+              </div>
+              <div>
+                <div id="chart_risk_contributions" class="chart-box"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h3 class="panel-title">Gemeinsame Korrelations- und Kovarianzmatrix &Sigma;<sub>B</sub> (Assets u &amp; FX-Hedges z)</h3>
+                <div class="panel-subtitle">Zahlenwerte sind sowohl als interaktive Heatmap als auch barrierefrei tabellarisch zugänglich</div>
+              </div>
+              <div class="btn-toolbar">
+                <label for="select_matrix_view_mode" class="context-label">Darstellung:</label>
+                <select id="select_matrix_view_mode" class="form-select">
+                  <option value="HEATMAP" selected>Korrelations-Heatmap (ECharts)</option>
+                  <option value="TABLE_CORR">Numerische Tabelle: Korrelationen</option>
+                  <option value="TABLE_COV">Numerische Tabelle: Kovarianz p.a. (%²)</option>
+                </select>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="chart_correlation_heatmap" class="chart-box-lg"></div>
+              <div id="matrix_table_wrapper" class="table-scroll" style="display: none; max-height: 480px;">
+                <table class="data-table" aria-label="Numerische Risikomatrix">
+                  <thead id="matrix_numeric_thead"></thead>
+                  <tbody id="matrix_numeric_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             WORKSPACE 4: 5-YEAR FORWARD-LOOKING RETURN SCENARIOS
+             ================================================================ -->
+        <section id="panel_returns" class="workspace-panel" aria-label="5-Jahres-Renditeszenarien">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Portfolio-Szenario-CAGR (5J, mit Hedge)</div>
+              <div id="scen_kpi_cagr_hedged" class="kpi-value">-</div>
+              <div class="kpi-sub">Aus 5-Jahres-Rebalancingpfad berechnet</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Portfolio-Szenario-CAGR (5J, ungesichert)</div>
+              <div id="scen_kpi_cagr_unhedged" class="kpi-value">-</div>
+              <div class="kpi-sub">In gewählter Basiswährung</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Lokale Baustein-CAGR (5J)</div>
+              <div id="scen_kpi_cagr_local" class="kpi-value">-</div>
+              <div class="kpi-sub">Vor Währungsumrechnung</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Szenario-Hedgebeitrag p.a.</div>
+              <div id="scen_kpi_hedge_effect" class="kpi-value">-</div>
+              <div class="kpi-sub">Carry + Spot-Pfad-Ausgleich</div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Deterministische 5-Jahres-Szenariopfade &amp; Renditebausteine</h2>
+                <div id="scen_uncertainty_note" class="panel-subtitle"></div>
+              </div>
+              <div class="btn-toolbar">
+                <label for="select_scenario_id" class="context-label">Szenario:</label>
+                <select id="select_scenario_id" class="form-select">
+                  <option value="base_5y" selected>Basisszenario (5J CMA)</option>
+                  <option value="stagflation_5y">Stagflation / Zinsdruck (5J)</option>
+                  <option value="disinflation_boom_5y">Produktivitäts-/Disinflationsboom (5J)</option>
+                </select>
+                <label for="select_rebalancing_rule" class="context-label">Rebalancing-Regel:</label>
+                <select id="select_rebalancing_rule" class="form-select">
+                  <option value="ANNUAL_REBALANCED" selected>Jährliches Rebalancing (Standard)</option>
+                  <option value="MONTHLY_REBALANCED">Monatliches Rebalancing</option>
+                  <option value="BUY_AND_HOLD">Buy &amp; Hold (Gewichtsdrift)</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid-2col" style="padding: var(--space-4);">
+              <div class="table-scroll">
+                <table class="data-table" aria-label="5-Jahres-Renditebausteine je Asset">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">Code</th>
+                      <th>Asset</th>
+                      <th>Währung</th>
+                      <th class="num">Gewicht w</th>
+                      <th class="num">Lokal 5J p.a. (Edit)</th>
+                      <th class="num">Basis unges. p.a.</th>
+                      <th class="num">Ø Carry p.a.</th>
+                      <th class="num">Basis inkl. Hedge p.a.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="scenario_assets_tbody"></tbody>
+                </table>
+              </div>
+              <div>
+                <div id="chart_scenario_paths" class="chart-box"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             WORKSPACE 5: MULTI-SAA & MULTI-MODEL COMPARISON
+             ================================================================ -->
+        <section id="panel_comparison" class="workspace-panel" aria-label="SAA-Vergleich und Tracking Error">
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Portfoliovergleich über Strategische Allokationen &amp; Hedge-Varianten</h2>
+                <div class="panel-subtitle">
+                  Direkter Ausweis von Volatilität, Diversifikationsquotient und aktivem Tracking Error &radic;((a<sub>2</sub>&minus;a<sub>1</sub>)'&Sigma;<sub>B</sub>(a<sub>2</sub>&minus;a<sub>1</sub>)) gegenüber der aktiven Referenz-SAA
+                </div>
+              </div>
+            </div>
+            <div class="panel-body no-pad table-scroll">
+              <table class="data-table" aria-label="SAA Vergleichstabelle">
+                <thead>
+                  <tr>
+                    <th class="sticky-col">Portfolio / Variante</th>
+                    <th class="num">Konfig-Hash</th>
+                    <th class="num">Aktienquote</th>
+                    <th class="num">FX vor Hedge</th>
+                    <th class="num">Hedge g</th>
+                    <th class="num">FX nach Hedge</th>
+                    <th class="num">Vol unges. p.a.</th>
+                    <th class="num">Vol mit Hedge p.a.</th>
+                    <th class="num">Hedge-Effekt</th>
+                    <th class="num">Div.-Ratio</th>
+                    <th class="num">Tracking Error p.a.</th>
+                  </tr>
+                </thead>
+                <tbody id="comparison_summary_tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-equal">
+            <div class="panel-card">
+              <div class="panel-header">
+                <h3 class="panel-title">Sensitivität über alle Risikosichten (Sample, Shrinkage, EWMA, Faktor, Stress)</h3>
+              </div>
+              <div class="panel-body">
+                <div id="chart_comparison_models" class="chart-box"></div>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="panel-header">
+                <h3 class="panel-title">Paarweise Tracking-Error-Matrix p.a.</h3>
+              </div>
+              <div class="panel-body no-pad table-scroll">
+                <table class="data-table" aria-label="Paarweise Tracking Errors">
+                  <thead id="comparison_te_thead"></thead>
+                  <tbody id="comparison_te_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             WORKSPACE 6: DATA, COVERAGE, AUDIT & METHODOLOGY
+             ================================================================ -->
+        <section id="panel_data" class="workspace-panel" aria-label="Daten, Abdeckung, Methodik und Exporte">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Aktive Datenquelle</div>
+              <div id="data_info_source" class="kpi-value" style="font-size: var(--text-sm);">-</div>
+              <div id="data_info_hashes" class="kpi-sub">-</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Session- &amp; Prozess-Cache</div>
+              <div id="data_info_cache" class="kpi-value" style="font-size: var(--text-sm);">-</div>
+              <div class="kpi-sub">Kein Re-Estimate bei Sliderbewegung</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Konfiguration &amp; Daten-Upload</div>
+              <div class="btn-toolbar" style="margin-top: 6px;">
+                <label class="btn" for="workbook_upload" style="cursor: pointer;">
+                  Excel-Datei laden (.xlsx)
+                  <input id="workbook_upload" name="workbook_upload" type="file" accept=".xlsx,.xls" style="display: none;" />
+                </label>
+                <button type="button" id="btn_save_json_config" class="btn">Konfig JSON speichern</button>
+                <label class="btn" for="input_load_json_config" style="cursor: pointer;">
+                  Konfig JSON laden
+                  <input id="input_load_json_config" type="file" accept=".json" style="display: none;" />
+                </label>
+              </div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Autoritative Exporte (mit Konfig-Hash)</div>
+              <div class="btn-toolbar" style="margin-top: 6px;">
+                <a id="download_xlsx" class="btn btn-primary shiny-download-link" href="" target="_blank" download>XLSX-Bundle</a>
+                <a id="download_json" class="btn shiny-download-link" href="" target="_blank" download>JSON-Report</a>
+                <a id="download_csv" class="btn shiny-download-link" href="" target="_blank" download>CSV-Risikotabelle</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Zeitreihen-Abdeckung, Innenlücken-Prüfung &amp; Konsolidierte Metadaten</h2>
+                <div class="panel-subtitle">Historienanfänge und -enden werden automatisch aus den Beobachtungsdaten berechnet; Innenlücken werden nie überbrückt</div>
+              </div>
+              <div class="btn-toolbar">
+                <label style="display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-xs); font-weight: 600;">
+                  <input type="checkbox" id="chk_allow_eur_proxy" checked />
+                  ECWGM1M vor 1999 als EUR-Cash-Proxy zulassen
+                </label>
+                <input type="search" id="input_coverage_search" class="form-control" placeholder="Code oder Name filtern …" aria-label="Metadaten filtern" />
+                <select id="select_coverage_type" class="form-select" aria-label="Serientyp filtern">
+                  <option value="ALL" selected>Alle Typen (24)</option>
+                  <option value="ASSET_TR">ASSET_TR</option>
+                  <option value="FX_SPOT">FX_SPOT</option>
+                  <option value="FX_FORWARD">FX_FORWARD</option>
+                  <option value="CASH_RATE">CASH_RATE</option>
+                </select>
+              </div>
+            </div>
+            <div class="panel-body no-pad table-scroll" style="max-height: 400px;">
+              <table class="data-table" aria-label="Metadaten und Abdeckung">
+                <thead>
+                  <tr>
+                    <th class="sticky-col">Code</th>
+                    <th>Autoritativer Name</th>
+                    <th>Typ</th>
+                    <th>Status</th>
+                    <th>Währung</th>
+                    <th>Exposure / Richtung</th>
+                    <th class="num">Start</th>
+                    <th class="num">Ende</th>
+                    <th class="num">Beob. (N)</th>
+                    <th class="num">Innenlücken</th>
+                    <th>Review-Status</th>
+                  </tr>
+                </thead>
+                <tbody id="data_coverage_tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="grid-equal">
+            <div class="panel-card">
+              <div class="panel-header">
+                <div>
+                  <h3 class="panel-title">FX-Forward-Audit: Zerlegung z = Carry + Spot-Offset</h3>
+                  <div class="panel-subtitle">Monatliche Abrechnung F<sub>t-1</sub> vs. S<sub>t</sub> relativ zu S<sub>t-1</sub></div>
+                </div>
+              </div>
+              <div class="panel-body no-pad table-scroll">
+                <table class="data-table" aria-label="FX Forward Audit">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">Komponente</th>
+                      <th>Währungspaar</th>
+                      <th class="num">Abdeckung</th>
+                      <th class="num">Ø Carry p.a.</th>
+                      <th class="num">Ø Spot-Offset p.a.</th>
+                      <th class="num">Ø Netto z p.a.</th>
+                      <th class="num">Vol(z) p.a.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fx_audit_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <div class="panel-header">
+                <div>
+                  <h3 class="panel-title">Kurze-Historien-Faktormodell (Donor-Audit)</h3>
+                  <div class="panel-subtitle">Direkte Momentenrekonstruktion ohne synthetische Zufallspfade</div>
+                </div>
+              </div>
+              <div class="panel-body no-pad table-scroll">
+                <table class="data-table" aria-label="Faktormodell Donor Audit">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">Asset</th>
+                      <th class="num">Beobachtungen</th>
+                      <th class="num">Overlap</th>
+                      <th>Donoren</th>
+                      <th>Betas</th>
+                      <th class="num">R²</th>
+                      <th class="num">Residual-Vol p.a.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="factor_audit_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h3 class="panel-title">Hintergrund-Validierung: Walk-Forward Out-of-Sample &amp; Block-Bootstrap</h3>
+                <div class="panel-subtitle">Zeitlich saubere Out-of-Sample-Risikoprospektive (120M Training / 12M Test) und gemeinsame Monatsblock-Unsicherheitsbänder</div>
+              </div>
+              <div class="btn-toolbar">
+                <button type="button" id="btn_run_validation" class="btn btn-primary">Walk-Forward &amp; Bootstrap starten</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="bootstrap_band_summary" style="font-size: var(--text-sm); font-weight: 600; margin-bottom: var(--space-3); color: var(--text-secondary);">
+                Noch kein Validierungslauf in dieser Sitzung gestartet.
+              </div>
+              <div class="table-scroll">
+                <table class="data-table" aria-label="Walk-Forward Validierungsergebnisse">
+                  <thead>
+                    <tr>
+                      <th class="sticky-col">Schätzer</th>
+                      <th class="num">Testfenster</th>
+                      <th class="num">Ø Prognose-Vol p.a.</th>
+                      <th class="num">Ø Realisierte Vol p.a.</th>
+                      <th class="num">Bias p.a.</th>
+                      <th class="num">MAE p.a.</th>
+                      <th class="num">RMSE p.a.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="validation_results_tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
