@@ -53,45 +53,97 @@ export function fmtNum(val, digits = 2, naStr = 'n/a') {
   return Number(val).toFixed(digits);
 }
 
+export function getAssetClassClass(assetClass) {
+  return String(assetClass || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+export function updateAllPortfolioKpis(store) {
+  const st = store.state;
+  const ev = st.results.portfolio_evaluation;
+  const prev = st.results.preview_evaluation;
+  const activeMetrics = prev || (ev ? ev.metrics : null);
+
+  if (!activeMetrics) return;
+
+  const isPrev = Boolean(prev && prev.is_preview);
+  const volText = fmtPct(activeMetrics.vol_annualized, 2);
+  const volSubText = isPrev ? 'Live-Vorschau aus Matrix' : `Autoritativ (${st.base_currency}, 12×Sigma)`;
+
+  const unhVolText = fmtPct(activeMetrics.vol_unhedged_annualized, 2);
+  const unhVolSubText = `Hedge-Effekt: ${fmtPct(activeMetrics.hedge_vol_effect_annualized, 2)}`;
+
+  const wSum = activeMetrics.weight_sum !== undefined
+    ? Number(activeMetrics.weight_sum)
+    : Object.values(st.draft_weights || {}).reduce((a, b) => a + Number(b || 0), 0);
+  const wSumText = fmtPct(wSum, 1);
+  const wSumSubText = Math.abs((wSum || 0) - 1) <= 1e-4 ? 'Voll investiert (Summe = 100%)' : 'Abweichung von 100%!';
+
+  const eqShare = activeMetrics.equity_share !== undefined
+    ? activeMetrics.equity_share
+    : (ev && ev.metrics ? ev.metrics.equity_share : null);
+  const eqText = fmtPct(eqShare, 1);
+
+  const foreignAfter = activeMetrics.foreign_exposure_after !== undefined
+    ? activeMetrics.foreign_exposure_after
+    : (ev && ev.metrics ? ev.metrics.foreign_exposure_after : null);
+  const eqSubText = `Fremdwährung nach Hedge: ${fmtPct(foreignAfter, 1)}`;
+
+  const kpis = [
+    {
+      ids: ['kpi_port_vol', 'kpi_curr_port_vol', 'kpi_risk_port_vol', 'kpi_ret_port_vol'],
+      dataKpi: 'port_vol',
+      val: volText,
+      sub: volSubText
+    },
+    {
+      ids: ['kpi_port_unh_vol', 'kpi_curr_port_unh_vol', 'kpi_risk_port_unh_vol', 'kpi_ret_port_unh_vol'],
+      dataKpi: 'port_unh_vol',
+      val: unhVolText,
+      sub: unhVolSubText
+    },
+    {
+      ids: ['kpi_port_wsum', 'kpi_curr_port_wsum', 'kpi_risk_port_wsum', 'kpi_ret_port_wsum'],
+      dataKpi: 'port_wsum',
+      val: wSumText,
+      sub: wSumSubText
+    },
+    {
+      ids: ['kpi_port_equity', 'kpi_curr_port_equity', 'kpi_risk_port_equity', 'kpi_ret_port_equity'],
+      dataKpi: 'port_equity',
+      val: eqText,
+      sub: eqSubText
+    }
+  ];
+
+  for (const item of kpis) {
+    for (const id of item.ids) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = item.val;
+      const subEl = document.getElementById(id + '_sub');
+      if (subEl && item.sub !== null && item.sub !== undefined) {
+        subEl.textContent = item.sub;
+      }
+    }
+    document.querySelectorAll(`[data-kpi="${item.dataKpi}"]`).forEach(el => {
+      el.textContent = item.val;
+    });
+    if (item.sub !== null && item.sub !== undefined) {
+      document.querySelectorAll(`[data-kpi-sub="${item.dataKpi}"]`).forEach(el => {
+        el.textContent = item.sub;
+      });
+    }
+  }
+}
+
 // ----------------------------------------------------------------------------
 // 1. Portfolio Workspace
 // ----------------------------------------------------------------------------
 export function renderPortfolioTriggers(store, bridge) {
   const st = store.state;
   const ev = st.results.portfolio_evaluation;
-  const prev = st.results.preview_evaluation;
-  const activeMetrics = prev || (ev ? ev.metrics : null);
 
-  // Update KPI summary cards in Portfolio Workspace
-  const setKpi = (id, text, subText = null) => {
-    const node = document.getElementById(id);
-    if (node) node.textContent = text;
-    if (subText !== null) {
-      const subNode = document.getElementById(id + '_sub');
-      if (subNode) subNode.textContent = subText;
-    }
-  };
-
-  if (activeMetrics) {
-    const isPrev = Boolean(prev && prev.is_preview);
-    setKpi(
-      'kpi_port_vol',
-      fmtPct(activeMetrics.vol_annualized, 2),
-      isPrev ? 'Live-Vorschau aus Matrix' : `Autoritativ (${st.base_currency}, 12×Sigma)`
-    );
-    setKpi(
-      'kpi_port_unh_vol',
-      fmtPct(activeMetrics.vol_unhedged_annualized, 2),
-      `Hedge-Effekt: ${fmtPct(activeMetrics.hedge_vol_effect_annualized, 2)}`
-    );
-    setKpi(
-      'kpi_port_wsum',
-      fmtPct(activeMetrics.weight_sum, 1),
-      Math.abs((activeMetrics.weight_sum || 0) - 1) <= 1e-4 ? 'Voll investiert (Summe = 100%)' : 'Abweichung von 100%!'
-    );
-    const eqShare = ev && ev.metrics ? ev.metrics.equity_share : null;
-    setKpi('kpi_port_equity', fmtPct(eqShare, 1), `Fremdwährung nach Hedge: ${fmtPct(ev?.metrics?.foreign_exposure_after, 1)}`);
-  }
+  // Update KPI summary cards across all workspaces with user inputs
+  updateAllPortfolioKpis(store);
 
   // Render SAA Portfolio Editor Table
   const tbody = document.getElementById('portfolio_weights_tbody');
@@ -156,12 +208,13 @@ export function renderPortfolioTriggers(store, bridge) {
       }
     });
 
+    const acClass = getAssetClassClass(row.asset_class);
     const ccyTagClass = row.fx_exposure === 'EMEQ' ? 'tag tag-emeq' : (row.is_domestic ? 'tag tag-domestic' : 'tag tag-ccy');
 
-    return el('tr', {}, [
+    return el('tr', { className: `asset-row asset-row-${acClass}` }, [
       el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: aid }),
       el('td', { textContent: row.name }),
-      el('td', {}, el('span', { className: 'tag', textContent: row.asset_class })),
+      el('td', {}, el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class })),
       el('td', {}, el('span', { className: ccyTagClass, textContent: row.fx_exposure })),
       el('td', { className: 'num' }, [sliderInput, ' ', numInput]),
       el('td', { className: 'num', textContent: row.is_domestic ? 'Inland' : (row.is_emeq ? 'n/a' : fmtPct(row.applied_h, 0)) }),
@@ -179,8 +232,22 @@ export function renderPortfolioTriggers(store, bridge) {
 function updateWeightFooter(st, tfootNode = document.getElementById('portfolio_weights_tfoot'), ev = st.results.portfolio_evaluation) {
   if (!tfootNode) return;
   const wSum = Object.values(st.draft_weights || {}).reduce((a, b) => a + Number(b || 0), 0);
-  const kpiSum = document.getElementById('kpi_port_wsum');
-  if (kpiSum) kpiSum.textContent = fmtPct(wSum, 1);
+  const wSumText = fmtPct(wSum, 1);
+  const subText = Math.abs(wSum - 1.0) <= 1e-4 ? 'Voll investiert (Summe = 100%)' : 'Abweichung von 100%!';
+
+  const idList = ['kpi_port_wsum', 'kpi_curr_port_wsum', 'kpi_risk_port_wsum', 'kpi_ret_port_wsum'];
+  for (const id of idList) {
+    const node = document.getElementById(id);
+    if (node) node.textContent = wSumText;
+    const subNode = document.getElementById(id + '_sub');
+    if (subNode) subNode.textContent = subText;
+  }
+  document.querySelectorAll('[data-kpi="port_wsum"]').forEach(el => {
+    el.textContent = wSumText;
+  });
+  document.querySelectorAll('[data-kpi-sub="port_wsum"]').forEach(el => {
+    el.textContent = subText;
+  });
 
   const tr = el('tr', {}, [
     el('td', { className: 'sticky-col', textContent: 'SUMME' }),
@@ -189,7 +256,7 @@ function updateWeightFooter(st, tfootNode = document.getElementById('portfolio_w
     el('td', { textContent: '' }),
     el('td', {
       className: 'num',
-      style: { color: Math.abs(wSum - 1.0) > 1e-4 ? 'var(--status-error-text)' : 'var(--status-ok-text)' },
+      style: { color: Math.abs(wSum - 1.0) > 1e-4 ? 'var(--status-dirty-text)' : 'var(--status-ok-text)' },
       textContent: fmtPct(wSum, 2)
     }),
     el('td', { className: 'num', textContent: '' }),
@@ -205,6 +272,7 @@ function updateWeightFooter(st, tfootNode = document.getElementById('portfolio_w
 // 2. Currencies & Hedge Engine Workspace
 // ----------------------------------------------------------------------------
 export function renderCurrenciesWorkspace(store, bridge) {
+  updateAllPortfolioKpis(store);
   const st = store.state;
   const ev = st.results.portfolio_evaluation;
   if (!ev || !ev.exposures) return;
@@ -342,8 +410,9 @@ export function renderCurrenciesWorkspace(store, bridge) {
         });
       }
 
-      return el('tr', {}, [
-        el('td', { className: 'sticky-col', style: { fontWeight: '600' }, textContent: ac }),
+      const acClass = getAssetClassClass(ac);
+      return el('tr', { className: `asset-row asset-row-${acClass}` }, [
+        el('td', { className: 'sticky-col' }, el('span', { className: `tag tag-asset tag-asset-${acClass}`, style: { fontWeight: '700' }, textContent: ac })),
         el('td', { className: 'num', textContent: fmtPct(row.total_weight, 2) }),
         el('td', { className: 'num', textContent: fmtPct(row.hedgeable_weight, 2) }),
         controlCell,
@@ -358,6 +427,7 @@ export function renderCurrenciesWorkspace(store, bridge) {
 // 3. Risk & Covariance Diagnostics Workspace
 // ----------------------------------------------------------------------------
 export function renderRiskWorkspace(store) {
+  updateAllPortfolioKpis(store);
   const st = store.state;
   const cm = st.covariance_models.active;
   const ev = st.results.portfolio_evaluation;
@@ -398,10 +468,16 @@ export function renderRiskWorkspace(store) {
       );
       clearAndAppend(rcTbody, rows);
     } else if (Array.isArray(ev.asset_contributions)) {
-      const rows = ev.asset_contributions.map(r =>
-        el('tr', {}, [
+      const rows = ev.asset_contributions.map(r => {
+        const acClass = getAssetClassClass(r.asset_class);
+        return el('tr', { className: `asset-row asset-row-${acClass}` }, [
           el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: r.asset_id }),
-          el('td', { textContent: `${r.name} (${r.fx_exposure})` }),
+          el('td', {}, [
+            el('span', { textContent: `${r.name} ` }),
+            r.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }) : null,
+            ' ',
+            r.fx_exposure ? el('span', { className: 'tag tag-ccy', textContent: r.fx_exposure }) : null
+          ].filter(Boolean)),
           el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
           el('td', { className: 'num', textContent: `${fmtPct(r.hedged_vol_ann, 2)} (unges.: ${fmtPct(r.unhedged_vol_ann, 2)})` }),
           el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
@@ -411,8 +487,8 @@ export function renderRiskWorkspace(store) {
             textContent: fmtPct(r.risk_contribution_ann, 3)
           }),
           el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
-        ])
-      );
+        ]);
+      });
       clearAndAppend(rcTbody, rows);
     }
   }
@@ -450,6 +526,7 @@ export function renderRiskWorkspace(store) {
 // 4. Forward-Looking 5Y Return Scenarios Workspace
 // ----------------------------------------------------------------------------
 export function renderScenariosWorkspace(store, bridge) {
+  updateAllPortfolioKpis(store);
   const st = store.state;
   const scEval = st.results.scenario_evaluation;
   if (!scEval) return;
@@ -489,9 +566,13 @@ export function renderScenariosWorkspace(store, bridge) {
         }
       });
 
-      return el('tr', {}, [
+      const acClass = getAssetClassClass(row.asset_class);
+      return el('tr', { className: `asset-row asset-row-${acClass}` }, [
         el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: aid }),
-        el('td', { textContent: row.name }),
+        el('td', {}, [
+          el('span', { textContent: `${row.name} ` }),
+          row.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class }) : null
+        ].filter(Boolean)),
         el('td', {}, el('span', { className: 'tag tag-ccy', textContent: `${row.return_currency} / ${row.fx_exposure}` })),
         el('td', { className: 'num', textContent: fmtPct(row.weight, 1) }),
         el('td', { className: 'num' }, [editInput, ' %']),

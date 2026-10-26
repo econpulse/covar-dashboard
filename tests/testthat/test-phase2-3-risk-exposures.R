@@ -63,6 +63,17 @@ test_that("ASSET_CLASS and CURRENCY_OVERLAY yield identical portfolio return and
   expect_true(any(hedge_rcs < 0))
   # Sum of component risk contributions equals portfolio annualized volatility
   expect_equal(sum(ev_class$component_contributions$risk_contribution_ann), ev_class$metrics$vol_annualized, tolerance = 1e-12)
+
+  # Non-100% weight sum must NOT block evaluation; only issue a WARNING
+  w_vec_105 <- w_vec * 1.05
+  ev_105 <- evaluate_portfolio(w_vec_105, hc_class, model, reg$meta)
+  expect_true(ev_105$valid)
+  expect_equal(ev_105$metrics$weight_sum, 1.05, tolerance = 1e-12)
+  expect_true(ev_105$metrics$vol_annualized > 0)
+  warn_codes <- vapply(ev_105$issues, function(x) x$code, character(1))
+  expect_true("WEIGHT_SUM_NOT_ONE" %in% warn_codes)
+  weight_issue <- ev_105$issues[[which(warn_codes == "WEIGHT_SUM_NOT_ONE")[1]]]
+  expect_equal(weight_issue$severity, "WARNING")
 })
 
 test_that("Portfolio variance a' Sigma a equals direct historical portfolio variance and w' (A Sigma A') w", {

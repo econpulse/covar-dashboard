@@ -41,7 +41,7 @@ derive_prehedge_exposures <- function(weights,
   if (abs(w_sum - 1.0) > 1e-4) {
     issues[[length(issues) + 1L]] <- make_issue(
       code = "WEIGHT_SUM_NOT_ONE",
-      severity = "ERROR",
+      severity = "WARNING",
       message = sprintf("Summe der Kapitalgewichte muss 100.0%% ergeben (aktuell: %.2f%%).", 100.0 * w_sum),
       scope = "EXPOSURE",
       details = list(weight_sum = w_sum)

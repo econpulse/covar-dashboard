@@ -3,12 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Multi-Asset Portfolio Studio</title>
   {{ headContent() }}
-  <link rel="stylesheet" href="css/tokens.css" />
-  <link rel="stylesheet" href="css/app.css" />
+  <link rel="stylesheet" href="css/tokens.css?v=20261026_04" />
+  <link rel="stylesheet" href="css/app.css?v=20261026_04" />
   <script src="vendor/echarts.min.js"></script>
-  <script type="module" src="js/app.js"></script>
+  <script>
+    window.__SHINY_MSG_BUFFER__ = window.__SHINY_MSG_BUFFER__ || [];
+    if (typeof window.Shiny !== 'undefined' && typeof window.Shiny.addCustomMessageHandler === 'function') {
+      try {
+        window.Shiny.addCustomMessageHandler('app_event', function(msg) {
+          if (window.__MAPS_APP__ && window.__MAPS_APP__.store) {
+            window.__MAPS_APP__.store.applyServerEnvelope(msg);
+          } else {
+            window.__SHINY_MSG_BUFFER__.push(msg);
+          }
+        });
+      } catch (e) {}
+    }
+  </script>
+  <script type="module" src="js/app.js?v=20261026_04"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -136,23 +153,23 @@
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-label">Portfoliovolatilität p.a. (mit Hedge)</div>
-              <div id="kpi_port_vol" class="kpi-value">-</div>
-              <div id="kpi_port_vol_sub" class="kpi-sub">12×Sigma Monatskonvention</div>
+              <div id="kpi_port_vol" data-kpi="port_vol" class="kpi-value">-</div>
+              <div id="kpi_port_vol_sub" data-kpi-sub="port_vol" class="kpi-sub">12×Sigma Monatskonvention</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-label">Volatilität ungesichert p.a.</div>
-              <div id="kpi_port_unh_vol" class="kpi-value">-</div>
-              <div id="kpi_port_unh_vol_sub" class="kpi-sub">Hedge-Effekt: -</div>
+              <div id="kpi_port_unh_vol" data-kpi="port_unh_vol" class="kpi-value">-</div>
+              <div id="kpi_port_unh_vol_sub" data-kpi-sub="port_unh_vol" class="kpi-sub">Hedge-Effekt: -</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-label">Summe Kapitalgewichte &Sigma;w</div>
-              <div id="kpi_port_wsum" class="kpi-value">100.0 %</div>
-              <div id="kpi_port_wsum_sub" class="kpi-sub">Hedge-Nominal g separat geführt</div>
+              <div id="kpi_port_wsum" data-kpi="port_wsum" class="kpi-value">100.0 %</div>
+              <div id="kpi_port_wsum_sub" data-kpi-sub="port_wsum" class="kpi-sub">Hedge-Nominal g separat geführt</div>
             </div>
             <div class="kpi-card">
               <div class="kpi-label">Aktienquote / Fremdwährung</div>
-              <div id="kpi_port_equity" class="kpi-value">-</div>
-              <div id="kpi_port_equity_sub" class="kpi-sub">-</div>
+              <div id="kpi_port_equity" data-kpi="port_equity" class="kpi-value">-</div>
+              <div id="kpi_port_equity_sub" data-kpi-sub="port_equity" class="kpi-sub">-</div>
             </div>
           </div>
 
@@ -226,6 +243,29 @@
              WORKSPACE 2: CURRENCIES & HEDGE ENGINE
              ================================================================ -->
         <section id="panel_currencies" class="workspace-panel" aria-label="Währungen und Hedge-Engine">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Portfoliovolatilität p.a. (mit Hedge)</div>
+              <div id="kpi_curr_port_vol" data-kpi="port_vol" class="kpi-value">-</div>
+              <div id="kpi_curr_port_vol_sub" data-kpi-sub="port_vol" class="kpi-sub">12×Sigma Monatskonvention</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Volatilität ungesichert p.a.</div>
+              <div id="kpi_curr_port_unh_vol" data-kpi="port_unh_vol" class="kpi-value">-</div>
+              <div id="kpi_curr_port_unh_vol_sub" data-kpi-sub="port_unh_vol" class="kpi-sub">Hedge-Effekt: -</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Summe Kapitalgewichte &Sigma;w</div>
+              <div id="kpi_curr_port_wsum" data-kpi="port_wsum" class="kpi-value">100.0 %</div>
+              <div id="kpi_curr_port_wsum_sub" data-kpi-sub="port_wsum" class="kpi-sub">Hedge-Nominal g separat geführt</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Aktienquote / Fremdwährung</div>
+              <div id="kpi_curr_port_equity" data-kpi="port_equity" class="kpi-value">-</div>
+              <div id="kpi_curr_port_equity_sub" data-kpi-sub="port_equity" class="kpi-sub">-</div>
+            </div>
+          </div>
+
           <div class="panel-card">
             <div class="panel-header">
               <div>
@@ -305,6 +345,29 @@
              WORKSPACE 3: RISK & COVARIANCE DIAGNOSTICS
              ================================================================ -->
         <section id="panel_risk" class="workspace-panel" aria-label="Risikomodelle und Kovarianz-Diagnostik">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Portfoliovolatilität p.a. (mit Hedge)</div>
+              <div id="kpi_risk_port_vol" data-kpi="port_vol" class="kpi-value">-</div>
+              <div id="kpi_risk_port_vol_sub" data-kpi-sub="port_vol" class="kpi-sub">12×Sigma Monatskonvention</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Volatilität ungesichert p.a.</div>
+              <div id="kpi_risk_port_unh_vol" data-kpi="port_unh_vol" class="kpi-value">-</div>
+              <div id="kpi_risk_port_unh_vol_sub" data-kpi-sub="port_unh_vol" class="kpi-sub">Hedge-Effekt: -</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Summe Kapitalgewichte &Sigma;w</div>
+              <div id="kpi_risk_port_wsum" data-kpi="port_wsum" class="kpi-value">100.0 %</div>
+              <div id="kpi_risk_port_wsum_sub" data-kpi-sub="port_wsum" class="kpi-sub">Hedge-Nominal g separat geführt</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Aktienquote / Fremdwährung</div>
+              <div id="kpi_risk_port_equity" data-kpi="port_equity" class="kpi-value">-</div>
+              <div id="kpi_risk_port_equity_sub" data-kpi-sub="port_equity" class="kpi-sub">-</div>
+            </div>
+          </div>
+
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-label">Aktiver Schätzer</div>
@@ -410,6 +473,29 @@
              WORKSPACE 4: 5-YEAR FORWARD-LOOKING RETURN SCENARIOS
              ================================================================ -->
         <section id="panel_returns" class="workspace-panel" aria-label="5-Jahres-Renditeszenarien">
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Portfoliovolatilität p.a. (mit Hedge)</div>
+              <div id="kpi_ret_port_vol" data-kpi="port_vol" class="kpi-value">-</div>
+              <div id="kpi_ret_port_vol_sub" data-kpi-sub="port_vol" class="kpi-sub">12×Sigma Monatskonvention</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Volatilität ungesichert p.a.</div>
+              <div id="kpi_ret_port_unh_vol" data-kpi="port_unh_vol" class="kpi-value">-</div>
+              <div id="kpi_ret_port_unh_vol_sub" data-kpi-sub="port_unh_vol" class="kpi-sub">Hedge-Effekt: -</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Summe Kapitalgewichte &Sigma;w</div>
+              <div id="kpi_ret_port_wsum" data-kpi="port_wsum" class="kpi-value">100.0 %</div>
+              <div id="kpi_ret_port_wsum_sub" data-kpi-sub="port_wsum" class="kpi-sub">Hedge-Nominal g separat geführt</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Aktienquote / Fremdwährung</div>
+              <div id="kpi_ret_port_equity" data-kpi="port_equity" class="kpi-value">-</div>
+              <div id="kpi_ret_port_equity_sub" data-kpi-sub="port_equity" class="kpi-sub">-</div>
+            </div>
+          </div>
+
           <div class="kpi-grid">
             <div class="kpi-card">
               <div class="kpi-label">Portfolio-Szenario-CAGR (5J, mit Hedge)</div>

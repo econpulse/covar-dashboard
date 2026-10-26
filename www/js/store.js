@@ -306,13 +306,30 @@ export class AppStore {
     const volUnhAnn = Math.sqrt(Math.max(0, 12.0 * varUnhM));
     const totalHedgeNotional = Object.values(gByCcy).reduce((a, b) => a + b, 0);
 
+    let equityShare = 0;
+    let foreignExpBefore = 0;
+    for (const aid of assetIds) {
+      const w = Number(weights[aid] || 0);
+      const m = metaMap[aid] || {};
+      if (m.Asset_Class === 'EQUITY') {
+        equityShare += w;
+      }
+      const ccy = m.FX_Exposure || m.Return_Currency || baseCcy;
+      if (ccy !== baseCcy) {
+        foreignExpBefore += w;
+      }
+    }
+    const foreignExpAfter = Math.max(0, foreignExpBefore - totalHedgeNotional);
+
     const preview = {
       is_preview: true,
       weight_sum: weightSum,
       vol_annualized: volAnn,
       vol_unhedged_annualized: volUnhAnn,
       hedge_vol_effect_annualized: volAnn - volUnhAnn,
-      total_hedge_notional: totalHedgeNotional
+      total_hedge_notional: totalHedgeNotional,
+      equity_share: equityShare,
+      foreign_exposure_after: foreignExpAfter
     };
     this.state.results.preview_evaluation = preview;
     return preview;

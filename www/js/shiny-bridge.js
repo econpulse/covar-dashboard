@@ -12,6 +12,7 @@ export class ShinyBridge {
     this.initialized = false;
     this.handlerRegistered = false;
     this.bootstrapSent = false;
+    this.outgoingQueue = [];
   }
 
   generateRequestId() {
@@ -21,17 +22,38 @@ export class ShinyBridge {
     return 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
   }
 
+  flushQueue() {
+    if (typeof window.Shiny !== 'undefined' && typeof window.Shiny.setInputValue === 'function') {
+      while (this.outgoingQueue.length > 0) {
+        const env = this.outgoingQueue.shift();
+        window.Shiny.setInputValue('app_command', env, { priority: 'event' });
+      }
+    }
+  }
+
   init() {
     if (this.initialized) return;
     this.initialized = true;
 
     const registerHandler = () => {
-      if (this.handlerRegistered) return;
       if (typeof window.Shiny !== 'undefined' && typeof window.Shiny.addCustomMessageHandler === 'function') {
-        this.handlerRegistered = true;
-        window.Shiny.addCustomMessageHandler('app_event', message => {
-          this.store.applyServerEnvelope(message);
-        });
+        if (!this.handlerRegistered) {
+          this.handlerRegistered = true;
+          try {
+            window.Shiny.addCustomMessageHandler('app_event', message => {
+              this.store.applyServerEnvelope(message);
+            });
+          } catch (e) {
+            // Handler might already be registered
+          }
+        }
+      }
+      // Drain any buffered messages received prior to module load
+      if (Array.isArray(window.__SHINY_MSG_BUFFER__) && window.__SHINY_MSG_BUFFER__.length > 0) {
+        while (window.__SHINY_MSG_BUFFER__.length > 0) {
+          const msg = window.__SHINY_MSG_BUFFER__.shift();
+          this.store.applyServerEnvelope(msg);
+        }
       }
     };
 
@@ -41,8 +63,9 @@ export class ShinyBridge {
       this.store.state.connection.connected = true;
       this.store.state.connection.reconnecting = false;
       this.store.notify('connection');
+      this.flushQueue();
 
-      if ((!wasReconnecting && !this.bootstrapSent && !this.store.state.dataset) || (!this.store.state.dataset && !this.bootstrapSent)) {
+      if ((!wasReconnecting && !this.store.state.dataset) || (!this.store.state.dataset && !this.bootstrapSent)) {
         this.bootstrapSent = true;
         this.sendCommand('app.bootstrap', {
           base_currency: this.store.state.base_currency,
@@ -67,7 +90,7 @@ export class ShinyBridge {
       this.store.notify('connection');
     };
 
-    // Register handler immediately if Shiny is already loaded
+    // Register handler immediately
     registerHandler();
 
     // Shiny fires shiny:connected and shiny:disconnected via jQuery on document
@@ -82,29 +105,43 @@ export class ShinyBridge {
     // Handle case where ES module executes after shiny:connected has already fired
     const checkAlreadyConnected = () => {
       registerHandler();
-      if (
+      this.flushQueue();
+      const shinyReady = (
         typeof window.Shiny !== 'undefined' &&
+        typeof window.Shiny.setInputValue === 'function' &&
         window.Shiny.shinyapp &&
         typeof window.Shiny.shinyapp.isConnected === 'function' &&
         window.Shiny.shinyapp.isConnected()
-      ) {
+      );
+
+      if (shinyReady) {
         if (!this.store.state.connection.connected) {
           onConnected();
+        }
+        if (!this.store.state.dataset) {
+          this.sendCommand('app.bootstrap', {
+            base_currency: this.store.state.base_currency,
+            model_id: this.store.state.active_model_id,
+            portfolio_id: this.store.state.active_portfolio_id
+          });
         }
         return true;
       }
       return false;
     };
 
-    if (!checkAlreadyConnected()) {
-      let attempts = 0;
-      const pollTimer = setInterval(() => {
-        attempts += 1;
-        if (checkAlreadyConnected() || this.store.state.connection.connected || attempts >= 30) {
-          clearInterval(pollTimer);
-        }
-      }, 100);
-    }
+    // Poll until connection is established and initial dataset is loaded
+    let attempts = 0;
+    const pollTimer = setInterval(() => {
+      attempts += 1;
+      registerHandler();
+      this.flushQueue();
+      if (checkAlreadyConnected() && this.store.state.dataset) {
+        clearInterval(pollTimer);
+      } else if (attempts >= 60 && this.store.state.connection.connected) {
+        clearInterval(pollTimer);
+      }
+    }, 200);
   }
 
   sendCommand(type, payload = {}, options = {}) {
@@ -139,7 +176,8 @@ export class ShinyBridge {
     if (typeof window.Shiny !== 'undefined' && typeof window.Shiny.setInputValue === 'function') {
       window.Shiny.setInputValue('app_command', envelope, { priority: 'event' });
     } else {
-      console.warn('[ShinyBridge] Shiny.setInputValue not yet ready:', envelope);
+      console.warn('[ShinyBridge] Shiny.setInputValue not yet ready, queueing:', type);
+      this.outgoingQueue.push(envelope);
     }
     return requestId;
   }

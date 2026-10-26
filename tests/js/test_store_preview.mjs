@@ -104,6 +104,8 @@ assert.ok(preview);
 assert.equal(preview.is_preview, true);
 assert.ok(Math.abs(preview.weight_sum - 1.0) < 1e-12);
 assert.ok(Math.abs(preview.total_hedge_notional - 0.3) < 1e-12);
+assert.ok(Math.abs(preview.equity_share - 0.6) < 1e-12);
+assert.ok(Math.abs(preview.foreign_exposure_after - 0.3) < 1e-12);
 
 // Manual calculation of a' Sigma_m a:
 const a = [0.6, 0.4, 0.3];
@@ -121,18 +123,48 @@ for (let i = 0; i < 3; i++) {
 const expectedVolAnn = Math.sqrt(12.0 * expectedVarM);
 assert.ok(Math.abs(preview.vol_annualized - expectedVolAnn) < 1e-12);
 
-// 3. Verify failed validation preserves previous valid result
+// 3. Verify failed validation preserves previous valid result on true ERROR
 store.state.jobs.latest_request_by_type['portfolio.evaluate'] = 'req_err_3';
 store.applyServerEnvelope({
   protocol_version: 1,
   request_id: 'req_err_3',
   type: 'portfolio.evaluate',
   status: 'error',
-  errors: [{ code: 'WEIGHT_SUM_NOT_ONE', severity: 'ERROR', message: 'Summe != 100%' }]
+  errors: [{ code: 'INVALID_WEIGHT_NUMBERS', severity: 'ERROR', message: 'Ungültige Zahlen' }]
 });
 
 assert.equal(store.state.dirty_flags.calc_state, 'failed');
 assert.equal(store.state.dirty_flags.showing_previous_valid_result, true);
 assert.equal(store.state.results.portfolio_evaluation.config_hash, 'hash_eur_2');
+
+// 4. Verify WEIGHT_SUM_NOT_ONE warning does NOT block evaluation
+store.state.jobs.latest_request_by_type['portfolio.evaluate'] = 'req_warn_4';
+store.applyServerEnvelope({
+  protocol_version: 1,
+  request_id: 'req_warn_4',
+  type: 'portfolio.evaluate',
+  status: 'ok',
+  result: {
+    portfolio_evaluation: {
+      valid: true,
+      config_hash: 'hash_eur_105',
+      metrics: {
+        weight_sum: 1.05,
+        vol_annualized: 0.0825,
+        vol_unhedged_annualized: 0.0846,
+        hedge_vol_effect_annualized: -0.0021,
+        equity_share: 0.525,
+        foreign_exposure_after: 0.38
+      }
+    }
+  },
+  warnings: [{ code: 'WEIGHT_SUM_NOT_ONE', severity: 'WARNING', message: 'Summe der Kapitalgewichte muss 100.0% ergeben (aktuell: 105.00%).' }]
+});
+
+assert.equal(store.state.dirty_flags.calc_state, 'current');
+assert.equal(store.state.dirty_flags.showing_previous_valid_result, false);
+assert.equal(store.state.results.portfolio_evaluation.config_hash, 'hash_eur_105');
+assert.equal(store.state.diagnostics.warnings.length, 1);
+assert.equal(store.state.diagnostics.warnings[0].code, 'WEIGHT_SUM_NOT_ONE');
 
 console.log('[PASS] All Frontend Store & Matrix Preview tests succeeded.');

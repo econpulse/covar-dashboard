@@ -4,9 +4,9 @@
 // Connects AppStore, ShinyBridge, EChartsManager, and Workspace Components
 // ============================================================================
 
-import { AppStore } from './store.js';
-import { ShinyBridge } from './shiny-bridge.js';
-import { EChartsManager } from './charts/echarts-manager.js';
+import { AppStore } from './store.js?v=20261026_04';
+import { ShinyBridge } from './shiny-bridge.js?v=20261026_04';
+import { EChartsManager } from './charts/echarts-manager.js?v=20261026_04';
 import {
   el,
   clearAndAppend,
@@ -16,8 +16,9 @@ import {
   renderRiskWorkspace,
   renderScenariosWorkspace,
   renderComparisonWorkspace,
-  renderDataWorkspace
-} from './components/workspaces.js';
+  renderDataWorkspace,
+  updateAllPortfolioKpis
+} from './components/workspaces.js?v=20261026_04';
 
 const store = new AppStore();
 const bridge = new ShinyBridge(store);
@@ -185,6 +186,7 @@ function switchTab(tabId) {
   document.querySelectorAll('.workspace-panel').forEach(panel => {
     panel.classList.toggle('active', panel.id === `panel_${tabId}`);
   });
+  updateAllPortfolioKpis(store);
   // Render charts on-demand when switching to a tab
   requestAnimationFrame(() => {
     renderActiveTabCharts();
@@ -490,17 +492,25 @@ function bindUIEvents() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function initApp() {
   bindUIEvents();
   store.subscribe((state, reason) => {
     if (reason === 'status' || reason === 'running' || reason === 'connection') {
       updateContextHeader();
+      updateAllPortfolioKpis(store);
       if (state.results.preview_evaluation) {
         renderPortfolioTriggers(store, bridge);
       }
     } else {
       renderAllWorkspaces();
+      updateAllPortfolioKpis(store);
     }
   });
   bridge.init();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

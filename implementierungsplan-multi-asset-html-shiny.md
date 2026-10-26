@@ -364,7 +364,6 @@ data/demo/
 tests/testthat/
 tests/js/
 README.md
-renv.lock
 ```
 
 Abhängigkeiten klein halten: Shiny, jsonlite, data.table oder vergleichbares effizientes Tabellenpaket, readxl, digest, cachem, geeignete Shrinkagebibliothek, promises/future und XLSX-Exportbibliothek. Nicht mehrere Pakete mit derselben Funktion ohne Grund laden. Frontendlibraries lokal versionieren, keine zwingende CDN-Verbindung. R-Versionen/Lockfile an tatsächlicher Zielumgebung ausrichten.
