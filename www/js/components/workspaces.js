@@ -158,6 +158,47 @@ export function renderPortfolioTriggers(store, bridge) {
     }
   }
 
+  // Fast in-place DOM update if table rows already exist (avoids destroying active sliders)
+  if (tbody.children.length === assetRows.length) {
+    let canUpdateInPlace = true;
+    for (let i = 0; i < assetRows.length; i++) {
+      if (tbody.children[i].getAttribute('data-asset-id') !== assetRows[i].asset_id) {
+        canUpdateInPlace = false;
+        break;
+      }
+    }
+
+    if (canUpdateInPlace) {
+      for (let i = 0; i < assetRows.length; i++) {
+        const row = assetRows[i];
+        const aid = row.asset_id;
+        const draftW = st.draft_weights[aid] !== undefined ? Number(st.draft_weights[aid]) : Number(row.weight || 0);
+        const wPct = Number((draftW * 100).toFixed(2));
+        const rc = rcMap[aid] || {};
+        const tr = tbody.children[i];
+
+        const sliderInput = tr.querySelector('input.range-slider');
+        const numInput = tr.querySelector('input.num-input');
+        if (sliderInput && document.activeElement !== sliderInput) {
+          sliderInput.value = wPct.toFixed(1);
+        }
+        if (numInput && document.activeElement !== numInput) {
+          numInput.value = wPct.toFixed(1);
+        }
+
+        if (tr.children[5]) {
+          tr.children[5].textContent = row.is_domestic ? 'Inland' : (row.is_emeq ? 'n/a' : fmtPct(row.applied_h, 0));
+        }
+        if (tr.children[6]) tr.children[6].textContent = fmtPct(row.hedge_notional, 1);
+        if (tr.children[7]) tr.children[7].textContent = fmtPct(rc.hedged_vol_ann, 2);
+        if (tr.children[8]) tr.children[8].textContent = fmtPct(rc.risk_contribution_ann, 2);
+        if (tr.children[9]) tr.children[9].textContent = fmtPct(rc.pct_risk_contribution, 1);
+      }
+      updateWeightFooter(st, tfoot, ev);
+      return;
+    }
+  }
+
   const trList = assetRows.map(row => {
     const aid = row.asset_id;
     const draftW = st.draft_weights[aid] !== undefined ? Number(st.draft_weights[aid]) : Number(row.weight || 0);
@@ -211,7 +252,7 @@ export function renderPortfolioTriggers(store, bridge) {
     const acClass = getAssetClassClass(row.asset_class);
     const ccyTagClass = row.fx_exposure === 'EMEQ' ? 'tag tag-emeq' : (row.is_domestic ? 'tag tag-domestic' : 'tag tag-ccy');
 
-    return el('tr', { className: `asset-row asset-row-${acClass}` }, [
+    return el('tr', { className: `asset-row asset-row-${acClass}`, 'data-asset-id': aid }, [
       el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: aid }),
       el('td', { textContent: row.name }),
       el('td', {}, el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class })),
@@ -229,7 +270,7 @@ export function renderPortfolioTriggers(store, bridge) {
   updateWeightFooter(st, tfoot, ev);
 }
 
-function updateWeightFooter(st, tfootNode = document.getElementById('portfolio_weights_tfoot'), ev = st.results.portfolio_evaluation) {
+export function updateWeightFooter(st, tfootNode = document.getElementById('portfolio_weights_tfoot'), ev = st.results.portfolio_evaluation) {
   if (!tfootNode) return;
   const wSum = Object.values(st.draft_weights || {}).reduce((a, b) => a + Number(b || 0), 0);
   const wSumText = fmtPct(wSum, 1);
@@ -498,6 +539,13 @@ export function renderRiskWorkspace(store) {
   const matTbody = document.getElementById('matrix_numeric_tbody');
   if (matThead && matTbody && cm.correlation && cm.sigma_annualized) {
     const viewMode = st.ui_filters.matrix_view_mode || 'HEATMAP';
+    if (viewMode === 'HEATMAP') {
+      // Skip constructing 225 DOM table cells while Heatmap mode is active
+      if (matThead.children.length > 0) matThead.replaceChildren();
+      if (matTbody.children.length > 0) matTbody.replaceChildren();
+      return;
+    }
+
     const isCov = viewMode === 'TABLE_COV';
     const matObj = isCov ? cm.sigma_annualized : cm.correlation;
     const ids = matObj.component_ids || [];

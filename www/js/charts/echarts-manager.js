@@ -8,16 +8,20 @@ export class EChartsManager {
   constructor() {
     this.instances = new Map();
     this.resizeObserver = null;
+    this.rafResize = null;
 
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(entries => {
-        for (const entry of entries) {
-          const id = entry.target.id;
-          const inst = this.instances.get(id);
-          if (inst && entry. contentRect.width > 0 && entry.contentRect.height > 0) {
-            inst.resize();
+        if (this.rafResize) cancelAnimationFrame(this.rafResize);
+        this.rafResize = requestAnimationFrame(() => {
+          for (const entry of entries) {
+            const id = entry.target.id;
+            const inst = this.instances.get(id);
+            if (inst && entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+              inst.resize();
+            }
           }
-        }
+        });
       });
     }
   }
@@ -58,6 +62,10 @@ export class EChartsManager {
   }
 
   disposeAll() {
+    if (this.rafResize) {
+      cancelAnimationFrame(this.rafResize);
+      this.rafResize = null;
+    }
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }

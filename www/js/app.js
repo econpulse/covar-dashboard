@@ -4,9 +4,9 @@
 // Connects AppStore, ShinyBridge, EChartsManager, and Workspace Components
 // ============================================================================
 
-import { AppStore } from './store.js?v=20261026_04';
-import { ShinyBridge } from './shiny-bridge.js?v=20261026_04';
-import { EChartsManager } from './charts/echarts-manager.js?v=20261026_04';
+import { AppStore } from './store.js?v=20261027_01';
+import { ShinyBridge } from './shiny-bridge.js?v=20261027_01';
+import { EChartsManager } from './charts/echarts-manager.js?v=20261027_01';
 import {
   el,
   clearAndAppend,
@@ -17,8 +17,9 @@ import {
   renderScenariosWorkspace,
   renderComparisonWorkspace,
   renderDataWorkspace,
-  updateAllPortfolioKpis
-} from './components/workspaces.js?v=20261026_04';
+  updateAllPortfolioKpis,
+  updateWeightFooter
+} from './components/workspaces.js?v=20261027_01';
 
 const store = new AppStore();
 const bridge = new ShinyBridge(store);
@@ -165,15 +166,53 @@ function renderActiveTabCharts() {
   }
 }
 
-function renderAllWorkspaces() {
+// Track which tab DOMs are dirty and need a refresh when displayed
+const dirtyTabs = new Set(['portfolio', 'currencies', 'risk', 'returns', 'comparison', 'data']);
+
+function renderWorkspaceForTab(tabId) {
+  switch (tabId) {
+    case 'portfolio':
+      renderPortfolioTriggers(store, bridge);
+      break;
+    case 'currencies':
+      renderCurrenciesWorkspace(store, bridge);
+      break;
+    case 'risk':
+      renderRiskWorkspace(store);
+      break;
+    case 'returns':
+      renderScenariosWorkspace(store, bridge);
+      break;
+    case 'comparison':
+      renderComparisonWorkspace(store);
+      break;
+    case 'data':
+      renderDataWorkspace(store);
+      break;
+  }
+  dirtyTabs.delete(tabId);
+}
+
+function markAllTabsDirty() {
+  dirtyTabs.add('portfolio');
+  dirtyTabs.add('currencies');
+  dirtyTabs.add('risk');
+  dirtyTabs.add('returns');
+  dirtyTabs.add('comparison');
+  dirtyTabs.add('data');
+}
+
+function renderCurrentWorkspace() {
   updateContextHeader();
-  renderPortfolioTriggers(store, bridge);
-  renderCurrenciesWorkspace(store, bridge);
-  renderRiskWorkspace(store);
-  renderScenariosWorkspace(store, bridge);
-  renderComparisonWorkspace(store);
-  renderDataWorkspace(store);
+  updateAllPortfolioKpis(store);
+  // Lazy execution: render only the active tab's workspace DOM to prevent UI freezing
+  renderWorkspaceForTab(store.state.active_tab);
   renderActiveTabCharts();
+}
+
+function renderAllWorkspaces() {
+  markAllTabsDirty();
+  renderCurrentWorkspace();
 }
 
 function switchTab(tabId) {
@@ -187,6 +226,12 @@ function switchTab(tabId) {
     panel.classList.toggle('active', panel.id === `panel_${tabId}`);
   });
   updateAllPortfolioKpis(store);
+
+  // If this tab was marked dirty while in background, render its DOM now
+  if (dirtyTabs.has(tabId)) {
+    renderWorkspaceForTab(tabId);
+  }
+
   // Render charts on-demand when switching to a tab
   requestAnimationFrame(() => {
     renderActiveTabCharts();
@@ -498,12 +543,13 @@ function initApp() {
     if (reason === 'status' || reason === 'running' || reason === 'connection') {
       updateContextHeader();
       updateAllPortfolioKpis(store);
+      // Fast path: update KPI text metrics and weight sum footer without rebuilding DOM table
       if (state.results.preview_evaluation) {
-        renderPortfolioTriggers(store, bridge);
+        updateWeightFooter(state);
       }
     } else {
-      renderAllWorkspaces();
-      updateAllPortfolioKpis(store);
+      markAllTabsDirty();
+      renderCurrentWorkspace();
     }
   });
   bridge.init();
