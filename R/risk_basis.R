@@ -38,6 +38,29 @@ build_risk_basis <- function(u,
     return(list(valid = FALSE, issues = issues))
   }
 
+  # Identify available factor donors (inactive assets or explicitly designated donors)
+  donor_factor_rows <- meta_dt[
+    (Series_Type %in% c("ASSET_TR", "FACTOR", "FACTOR_DONOR") & Active == FALSE) |
+    (isTRUE(Is_Donor) | Is_Donor == TRUE)
+  ]
+  donor_factor_ids <- setdiff(unique(donor_factor_rows$Code), asset_ids)
+  donor_factor_ids <- intersect(donor_factor_ids, unique(u_dt$Code))
+
+  # Extract preferred donors specified in metadata per asset
+  preferred_donors_meta <- list()
+  if ("Preferred_Donors" %in% names(meta_dt)) {
+    for (aid in asset_ids) {
+      pd_raw <- meta_dt[Code == aid, Preferred_Donors][1L]
+      if (!is.na(pd_raw) && nzchar(trimws(pd_raw))) {
+        split_donors <- trimws(unlist(strsplit(pd_raw, "[,;]+")))
+        split_donors <- split_donors[nzchar(split_donors)]
+        if (length(split_donors) > 0L) {
+          preferred_donors_meta[[aid]] <- split_donors
+        }
+      }
+    }
+  }
+
   # Optional Excess Return transformation: subtract base-currency cash ONCE from u, never from z
   if (identical(return_mode, "EXCESS")) {
     if (is.null(cash_returns)) {
@@ -97,8 +120,10 @@ build_risk_basis <- function(u,
   grid <- unique(u_dt[, .(date, month_key, month_index)])
   data.table::setorder(grid, month_index)
 
+  all_u_codes <- unique(c(asset_ids, donor_factor_ids))
+  u_all <- u_dt[Code %in% all_u_codes]
   u_wide <- data.table::dcast(
-    u_univ[, .(month_index, Code, u_base)],
+    u_all[, .(month_index, Code, u_base)],
     month_index ~ Code,
     value.var = "u_base"
   )
@@ -110,13 +135,16 @@ build_risk_basis <- function(u,
     X_dt <- merge(X_dt, z_wide, by = "month_index", all.x = TRUE, sort = TRUE)
   }
 
-  # Ensure exact column order matching component_ids
-  missing_cols <- setdiff(component_ids, names(X_dt))
+  all_basis_ids <- unique(c(component_ids, donor_factor_ids))
+  missing_cols <- setdiff(all_basis_ids, names(X_dt))
   for (mc in missing_cols) {
     data.table::set(X_dt, j = mc, value = NA_real_)
   }
   X_mat <- as.matrix(X_dt[, ..component_ids])
   rownames(X_mat) <- X_dt$month_key
+
+  X_full_mat <- as.matrix(X_dt[, ..all_basis_ids])
+  rownames(X_full_mat) <- X_dt$month_key
 
   # Component metadata and availability summary
   comp_avail_list <- lapply(component_ids, function(cid) {
@@ -156,7 +184,10 @@ build_risk_basis <- function(u,
     base_ccy = base_ccy,
     return_mode = return_mode,
     component_ids = component_ids,
-    X_mat = X_mat
+    donor_factor_ids = donor_factor_ids,
+    preferred_donors_meta = preferred_donors_meta,
+    X_mat = X_mat,
+    X_full = X_full_mat
   ))
 
   fx_audit_summary <- if (nrow(z_dt) > 0L) {
@@ -182,6 +213,8 @@ build_risk_basis <- function(u,
     asset_ids = asset_ids,
     hedge_ids = hedge_ids,
     component_ids = component_ids,
+    donor_factor_ids = donor_factor_ids,
+    preferred_donors_meta = preferred_donors_meta,
     required_hedge_currencies = required_hedge_ccys,
     available_hedge_currencies = available_hedge_ccys,
     missing_hedge_currencies = missing_hedge_ccys,
@@ -189,6 +222,7 @@ build_risk_basis <- function(u,
     month_keys = X_dt$month_key,
     month_index = X_dt$month_index,
     X_matrix = X_mat,
+    X_full = X_full_mat,
     X_table = X_dt,
     component_availability = comp_avail_dt,
     fx_audit_summary = fx_audit_summary,
@@ -201,6 +235,7 @@ build_risk_basis <- function(u,
 resolve_estimation_sample <- function(basis, settings = list()) {
   issues <- basis$issues
   X_mat <- basis$X_matrix
+  X_full_basis <- basis$X_full %||% X_mat
   month_keys <- basis$month_keys
   dates <- basis$dates
   comp_ids <- basis$component_ids
@@ -245,8 +280,8 @@ resolve_estimation_sample <- function(basis, settings = list()) {
   }
 
   selected_rows <- if (identical(missing_mode, "FACTOR_RECONSTRUCTION")) {
-    # Keep all rows where at least one component is observed; factor model handles staggered starts
-    which(rowSums(!is.na(X_mat)) > 0L)
+    # Keep all rows where at least one component or donor factor is observed; factor model handles staggered starts
+    which(rowSums(!is.na(X_full_basis)) > 0L)
   } else {
     full_complete_rows
   }
@@ -314,7 +349,9 @@ resolve_estimation_sample <- function(basis, settings = list()) {
     missing_hedge_currencies = basis$missing_hedge_currencies,
     component_availability = basis$component_availability,
     X_sample = X_sample,
-    X_full = X_mat,
+    X_full = X_full_basis[selected_rows, , drop = FALSE],
+    donor_factor_ids = basis$donor_factor_ids %||% character(0),
+    preferred_donors_meta = basis$preferred_donors_meta %||% list(),
     month_keys = sample_months,
     all_month_keys = month_keys,
     issues = issues

@@ -85,6 +85,43 @@ validate_metadata <- function(meta,
     }
   }
 
+  # Ensure optional donor factor columns exist
+  if (!("Preferred_Donors" %in% names(dt))) {
+    dt[, Preferred_Donors := NA_character_]
+  } else {
+    dt[, Preferred_Donors := as.character(Preferred_Donors)]
+    dt[trimws(Preferred_Donors) == "" | Preferred_Donors == "NA", Preferred_Donors := NA_character_]
+  }
+  if (!("Is_Donor" %in% names(dt))) {
+    dt[, Is_Donor := FALSE]
+  } else {
+    dt[, Is_Donor := to_logical(Is_Donor)]
+    dt[is.na(Is_Donor), Is_Donor := FALSE]
+  }
+
+  # Validate Preferred_Donors references
+  pref_rows <- which(!is.na(dt$Preferred_Donors))
+  for (pr in pref_rows) {
+    p_cd <- dt$Code[pr]
+    p_str <- dt$Preferred_Donors[pr]
+    tokens <- trimws(unlist(strsplit(p_str, "[,;]+")))
+    tokens <- tokens[nzchar(tokens)]
+    unknown <- setdiff(tokens, dt$Code)
+    if (length(unknown) > 0L) {
+      issues[[length(issues) + 1L]] <- make_issue(
+        code = "UNKNOWN_PREFERRED_DONOR_CODE",
+        severity = "WARNING",
+        message = sprintf(
+          "Reihe '%s' verweist in Preferred_Donors auf nicht im Metadatenblatt definierte(n) Code(s): %s",
+          p_cd, paste(unknown, collapse = ", ")
+        ),
+        scope = "METADATA",
+        series_code = p_cd,
+        details = list(unknown_codes = unknown)
+      )
+    }
+  }
+
   # Check duplicate Codes in Metadata
   dup_codes <- unique(dt$Code[!is.na(dt$Code) & duplicated(dt$Code)])
   if (length(dup_codes) > 0L) {
@@ -566,11 +603,17 @@ build_series_registry <- function(data, meta, policy = NULL, file_hash = NULL, s
   issues <- c(meta_val$issues, obs_val$issues)
   has_errors <- any(vapply(issues, function(x) identical(x$severity, "ERROR"), logical(1)))
 
+  meta_hash_cols <- intersect(
+    c("Code", "Series_Type", "Active", "Return_Currency", "FX_Exposure", "Hedge_Allowed",
+      "Foreign_Currency", "Quote_Currency", "Quote_Direction", "Quote_Scale",
+      "Forward_Type", "Points_Multiplier", "Cash_Currency", "Proxy_Type", "Proxy_Until",
+      "Preferred_Donors", "Is_Donor"),
+    names(meta_enriched)
+  )
+
   data_hash <- compute_object_hash(list(
     data = data[, .(month_key, Code, value)],
-    meta = meta_enriched[, .(Code, Series_Type, Active, Return_Currency, FX_Exposure, Hedge_Allowed,
-                             Foreign_Currency, Quote_Currency, Quote_Direction, Quote_Scale,
-                             Forward_Type, Points_Multiplier, Cash_Currency, Proxy_Type, Proxy_Until)]
+    meta = meta_enriched[, ..meta_hash_cols]
   ))
 
   registry <- list(
@@ -584,6 +627,10 @@ build_series_registry <- function(data, meta, policy = NULL, file_hash = NULL, s
     coverage = obs_val$coverage,
     active_assets = meta_enriched[Series_Type == "ASSET_TR" & Active == TRUE, Code],
     all_assets = meta_enriched[Series_Type == "ASSET_TR", Code],
+    donor_factor_codes = meta_enriched[
+      (Series_Type %in% c("ASSET_TR", "FACTOR", "FACTOR_DONOR") & Active == FALSE) | isTRUE(Is_Donor),
+      Code
+    ],
     fx_spot_codes = meta_enriched[Series_Type == "FX_SPOT" & Active == TRUE, Code],
     fx_forward_codes = meta_enriched[Series_Type == "FX_FORWARD" & Active == TRUE, Code],
     cash_codes = meta_enriched[Series_Type == "CASH_RATE" & Active == TRUE, Code],

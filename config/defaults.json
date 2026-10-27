@@ -73,6 +73,12 @@
       "window_mode": "FULL",
       "window_months": null,
       "missing_mode": "FACTOR_RECONSTRUCTION",
+      "factor_selection": {
+        "mode": "AUTO",
+        "max_factors": 3,
+        "min_delta_bic": 2.0,
+        "max_collinearity": 0.95
+      },
       "description": "Direkte gemeinsame Faktor-Momentenschätzung für kürzere Zeitreihen auf Basis wirtschaftlich zulässiger Langfrist-Donoren unter Erhalt der PSD-Struktur."
     },
     "crisis_stress": {

@@ -8,7 +8,7 @@
 index_levels_to_returns <- function(levels, meta = NULL) {
   dt <- data.table::as.data.table(levels)
   if (!is.null(meta)) {
-    asset_codes <- meta[Series_Type == "ASSET_TR", Code]
+    asset_codes <- meta[Series_Type %in% c("ASSET_TR", "FACTOR", "FACTOR_DONOR"), Code]
     dt <- dt[Code %in% asset_codes]
   }
   data.table::setorder(dt, Code, month_index)
@@ -60,7 +60,7 @@ translate_asset_returns <- function(returns, crosses, meta) {
     NA_real_
   )]
 
-  asset_meta <- meta_dt[Series_Type == "ASSET_TR", .(
+  asset_meta <- meta_dt[Series_Type %in% c("ASSET_TR", "FACTOR", "FACTOR_DONOR"), .(
     Code, Name, Asset_Class, Sub_Asset_Class, Return_Currency,
     FX_Exposure, Hedge_Allowed, Default_Hedge_Ratio, Return_Structure, Active
   )]

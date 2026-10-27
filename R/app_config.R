@@ -27,7 +27,7 @@ load_app_config <- function(config_path = "config/defaults.json",
         "Points_Multiplier", "Tenor", "Cash_Currency", "Rate_Convention",
         "Day_Count", "Spot_Reference_Code", "Source", "Notes"
       ),
-      optional_versioned_columns = c("Proxy_Type", "Proxy_Until", "Proxy_Description")
+      optional_versioned_columns = c("Proxy_Type", "Proxy_Until", "Proxy_Description", "Preferred_Donors", "Is_Donor")
     )
   }
   class(cfg) <- c("maps_config", "list")

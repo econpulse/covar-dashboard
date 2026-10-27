@@ -197,6 +197,7 @@ get_or_estimate_covariance <- function(state,
       halflife_months = model_cfg$halflife_months,
       regularization_gamma = model_cfg$regularization_gamma,
       missing_mode = model_cfg$missing_mode,
+      factor_selection = model_cfg$factor_selection,
       start_month = model_cfg$start_month,
       end_month = model_cfg$end_month,
       engine_version = state$config$engine_version %||% "1.0.0"

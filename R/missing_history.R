@@ -5,24 +5,117 @@
 # Pure R module - no Shiny dependencies
 # ==============================================================================
 
+#' Automatic parsimonious factor donor selection via forward stepwise BIC
+#'
+#' Evaluates candidate donors for a short target series, selecting the most
+#' informative donors while controlling multi-collinearity and preventing
+#' in-sample overfitting through Bayesian Information Criterion (BIC).
+#'
+#' @param y_obs Vector of observed returns for target series on overlap window
+#' @param F_obs Matrix of observed returns for candidate donors on overlap window
+#' @param max_factors Maximum number of factors to select (default: 3)
+#' @param min_delta_bic Minimum reduction in BIC required to add another factor (default: 2.0)
+#' @param max_collinearity Maximum pairwise correlation allowed between selected donors (default: 0.95)
+#' @return Character vector of selected donor column names
+select_best_donors <- function(y_obs,
+                               F_obs,
+                               max_factors = 3L,
+                               min_delta_bic = 2.0,
+                               max_collinearity = 0.95) {
+  cand_names <- colnames(F_obs)
+  n <- length(y_obs)
+  if (length(cand_names) == 0L || n < 10L) {
+    return(character(0))
+  }
+
+  y_bar <- mean(y_obs)
+  tss <- sum((y_obs - y_bar)^2)
+  if (tss <= 1e-12) {
+    return(character(0))
+  }
+
+  # Step 0: Base null model (intercept only)
+  best_bic <- n * log(tss / n)
+  selected <- character(0)
+
+  for (step in seq_len(max_factors)) {
+    remaining <- setdiff(cand_names, selected)
+    if (length(remaining) == 0L) break
+
+    step_best_cand <- NULL
+    step_best_bic <- best_bic
+
+    for (cand in remaining) {
+      trial_set <- c(selected, cand)
+      X_trial <- F_obs[, trial_set, drop = FALSE]
+
+      # Check collinearity against already selected donors
+      if (length(selected) > 0L) {
+        c_cors <- abs(stats::cor(F_obs[, cand], F_obs[, selected, drop = FALSE]))
+        if (any(c_cors > max_collinearity, na.rm = TRUE)) {
+          next
+        }
+      }
+
+      # Fast ridge-stabilized OLS fit
+      X_c <- sweep(X_trial, 2L, colMeans(X_trial), "-")
+      XtX <- crossprod(X_c)
+      k <- ncol(X_trial)
+      pen <- 1e-4 * mean(diag(XtX))
+      beta <- tryCatch(
+        solve(XtX + diag(pen, nrow = k), crossprod(X_c, y_obs - y_bar)),
+        error = function(e) NULL
+      )
+      if (is.null(beta)) next
+
+      y_hat <- y_bar + as.numeric(X_c %*% beta)
+      rss <- sum((y_obs - y_hat)^2)
+      bic_val <- n * log(max(rss, 1e-12) / n) + (k + 1L) * log(n)
+
+      if (bic_val < step_best_bic) {
+        step_best_bic <- bic_val
+        step_best_cand <- cand
+      }
+    }
+
+    # Require significant BIC reduction to prevent adding noisy extra factors
+    if (!is.null(step_best_cand) && (best_bic - step_best_bic) >= min_delta_bic) {
+      selected <- c(selected, step_best_cand)
+      best_bic <- step_best_bic
+    } else {
+      break
+    }
+  }
+
+  # Fallback if no factor met BIC threshold: pick single highest absolute correlation donor
+  if (length(selected) == 0L) {
+    cors <- abs(stats::cor(y_obs, F_obs))
+    if (length(cors) > 0L && any(!is.na(cors))) {
+      best_single <- cand_names[which.max(cors)]
+      selected <- best_single
+    }
+  }
+
+  selected
+}
+
 reconstruct_factor_moments <- function(sample, settings = list()) {
   issues <- sample$issues %||% list()
   X_full <- sample$X_full
   comp_ids <- sample$component_ids
   asset_ids <- sample$asset_ids
   month_keys <- sample$all_month_keys
+  preferred_donors_meta <- sample$preferred_donors_meta %||% list()
 
-  # Keep rows where at least the core long-history components are observed
-  non_na_counts <- colSums(!is.na(X_full))
-  max_obs <- max(non_na_counts)
-
-  # Define long-history donors as components with >= 95% of max_obs and complete on their common span
-  donor_candidates <- names(non_na_counts)[non_na_counts >= floor(0.95 * max_obs)]
-  donor_complete_rows <- which(rowSums(is.na(X_full[, donor_candidates, drop = FALSE])) == 0L)
+  # Anchor long-history horizon by the longest-history portfolio components in comp_ids
+  comp_obs <- colSums(!is.na(X_full[, comp_ids, drop = FALSE]))
+  max_comp_obs <- max(comp_obs)
+  core_long_comp <- comp_ids[comp_obs >= floor(0.95 * max_comp_obs)]
+  donor_complete_rows <- which(rowSums(is.na(X_full[, core_long_comp, drop = FALSE])) == 0L)
 
   if (length(donor_complete_rows) < 24L) {
     # Fallback to complete-case if donor span is too short
-    cc_rows <- which(rowSums(is.na(X_full)) == 0L)
+    cc_rows <- which(rowSums(is.na(X_full[, comp_ids, drop = FALSE])) == 0L)
     X_cc <- X_full[cc_rows, comp_ids, drop = FALSE]
     S_cc <- stats::cov(X_cc)
     return(list(
@@ -40,14 +133,17 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
     ))
   }
 
-  X_sub <- X_full[donor_complete_rows, comp_ids, drop = FALSE]
+  X_sub <- X_full[donor_complete_rows, , drop = FALSE]
   sub_months <- month_keys[donor_complete_rows]
   T_long <- nrow(X_sub)
 
-  # Identify components fully observed on donor_complete_rows vs short-history components
-  missing_in_sub <- colSums(is.na(X_sub))
-  donor_ids <- names(missing_in_sub)[missing_in_sub == 0L]
-  short_ids <- names(missing_in_sub)[missing_in_sub > 0L]
+  # All series complete on donor_complete_rows are valid candidate donors (active, hedges, and inactive factor series)
+  all_missing_sub <- colSums(is.na(X_sub))
+  donor_ids <- names(all_missing_sub)[all_missing_sub == 0L]
+
+  # Short series needing reconstruction are those in comp_ids with missing observations in X_sub
+  comp_missing_sub <- colSums(is.na(X_sub[, comp_ids, drop = FALSE]))
+  short_ids <- names(comp_missing_sub)[comp_missing_sub > 0L]
 
   # Economically admissible donor mapping for known asset types (with automatic fallback)
   preferred_donors_map <- list(
@@ -57,6 +153,12 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
     "SWISSMI(RI)" = c("MSSWITL(RI)"),
     "SWSPIXD"     = c("MSSWITL(RI)")
   )
+
+  fac_cfg <- settings$factor_selection %||% list()
+  sel_mode <- toupper(fac_cfg$mode %||% "AUTO")
+  max_factors <- as.integer(fac_cfg$max_factors %||% 3L)
+  min_delta_bic <- as.numeric(fac_cfg$min_delta_bic %||% 2.0)
+  max_collinearity <- as.numeric(fac_cfg$max_collinearity %||% 0.95)
 
   # Estimate long-run donor moments (with optional constant-correlation shrinkage)
   F_mat <- X_sub[, donor_ids, drop = FALSE]
@@ -73,7 +175,8 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
       n_obs_common = T_long,
       start_month = sub_months[1L],
       end_month = sub_months[length(sub_months)],
-      donor_ids = donor_ids,
+      donor_ids = intersect(donor_ids, comp_ids),
+      all_donor_ids = donor_ids,
       short_ids = character(0),
       factor_audit = data.table::data.table(),
       model_supported_share = 0.0,
@@ -95,14 +198,58 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
     y_vec <- X_sub[, sid]
     obs_idx <- which(!is.na(y_vec))
     T_obs <- length(obs_idx)
+    y_obs <- y_vec[obs_idx]
 
-    cand_donors <- intersect(preferred_donors_map[[sid]] %||% intersect(donor_ids, asset_ids), donor_ids)
+    cand_donors <- character(0)
+    selection_type <- "NONE"
+
+    # Priority 1: User-specified Preferred_Donors in metadata sheet
+    if (!is.null(preferred_donors_meta[[sid]])) {
+      cand_donors <- intersect(preferred_donors_meta[[sid]], donor_ids)
+      if (length(cand_donors) > 0L) {
+        selection_type <- "METADATA_SPECIFIED"
+      }
+    }
+
+    # Priority 2: Preset map if PRESET_FIRST requested
+    if (length(cand_donors) == 0L && identical(sel_mode, "PRESET_FIRST") && !is.null(preferred_donors_map[[sid]])) {
+      cand_donors <- intersect(preferred_donors_map[[sid]], donor_ids)
+      if (length(cand_donors) > 0L) {
+        selection_type <- "PRESET_MAP"
+      }
+    }
+
+    # Priority 3: Automatic selection using BIC from all available candidate donors in donor_ids
+    if (length(cand_donors) == 0L && sel_mode %in% c("AUTO", "FORCE_AUTO")) {
+      pool_donors <- setdiff(donor_ids, sid)
+      if (length(pool_donors) > 0L && T_obs >= 12L) {
+        F_cand_obs <- F_mat[obs_idx, pool_donors, drop = FALSE]
+        cand_donors <- select_best_donors(
+          y_obs = y_obs,
+          F_obs = F_cand_obs,
+          max_factors = max_factors,
+          min_delta_bic = min_delta_bic,
+          max_collinearity = max_collinearity
+        )
+        if (length(cand_donors) > 0L) {
+          selection_type <- "AUTO_BIC"
+        }
+      }
+    }
+
+    # Priority 4: Preset fallback or first 3 available donors
+    if (length(cand_donors) == 0L && !is.null(preferred_donors_map[[sid]])) {
+      cand_donors <- intersect(preferred_donors_map[[sid]], donor_ids)
+      if (length(cand_donors) > 0L) {
+        selection_type <- "PRESET_MAP_FALLBACK"
+      }
+    }
     if (length(cand_donors) == 0L) {
       cand_donors <- donor_ids[seq_len(min(3L, length(donor_ids)))]
+      selection_type <- "FALLBACK_FIRST3"
     }
 
     F_obs <- F_mat[obs_idx, cand_donors, drop = FALSE]
-    y_obs <- y_vec[obs_idx]
 
     # Center on overlap window and apply light ridge stabilization to prevent overfitting
     y_bar <- mean(y_obs)
@@ -142,6 +289,7 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
       overlap_end = sub_months[max(obs_idx)],
       donors = paste(cand_donors, collapse = ", "),
       betas = paste(sprintf("%s=%.3f", cand_donors, beta_sub), collapse = "; "),
+      selection_mode = selection_type,
       r_squared = r_sq,
       residual_vol_ann = sqrt(s2_eps * 12.0)
     )
@@ -188,14 +336,14 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
   rownames(Sigma_joint) <- all_ordered
   colnames(Sigma_joint) <- all_ordered
 
-  # Reorder to exact component_ids order
+  # Reorder and slice to exact component_ids order (excluding non-component donor factors)
   Sigma_final <- Sigma_joint[comp_ids, comp_ids, drop = FALSE]
   mu_Y <- alpha_vec + as.numeric(B_mat %*% mu_F)
   names(mu_Y) <- short_ids
   mu_final <- c(mu_F, mu_Y)[comp_ids]
 
   total_cells <- T_long * length(comp_ids)
-  missing_cells <- sum(missing_in_sub)
+  missing_cells <- sum(comp_missing_sub)
   model_share <- missing_cells / total_cells
 
   issues[[length(issues) + 1L]] <- make_issue(
@@ -213,10 +361,11 @@ reconstruct_factor_moments <- function(sample, settings = list()) {
     Sigma = Sigma_final,
     mean_vector = mu_final,
     n_obs_long = T_long,
-    n_obs_common = sum(rowSums(is.na(X_sub)) == 0L),
+    n_obs_common = sum(rowSums(is.na(X_sub[, comp_ids, drop = FALSE])) == 0L),
     start_month = sub_months[1L],
     end_month = sub_months[length(sub_months)],
-    donor_ids = donor_ids,
+    donor_ids = intersect(donor_ids, comp_ids),
+    all_donor_ids = donor_ids,
     short_ids = short_ids,
     factor_audit = data.table::rbindlist(audit_rows, fill = TRUE),
     model_supported_share = model_share,

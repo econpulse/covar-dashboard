@@ -37,10 +37,12 @@
   "optional_versioned_columns": [
     "Proxy_Type",
     "Proxy_Until",
-    "Proxy_Description"
+    "Proxy_Description",
+    "Preferred_Donors",
+    "Is_Donor"
   ],
   "enums": {
-    "Series_Type": ["ASSET_TR", "FX_SPOT", "FX_FORWARD", "CASH_RATE"],
+    "Series_Type": ["ASSET_TR", "FX_SPOT", "FX_FORWARD", "CASH_RATE", "FACTOR", "FACTOR_DONOR"],
     "Value_Unit": ["INDEX_POINTS", "OUTRIGHT", "POINTS", "PERCENT_PA"],
     "Asset_Class": ["EQUITY", "BOND", "REAL_ESTATE", "GOLD", "COMMODITY", "CASH", "ALTERNATIVE"],
     "Quote_Direction": ["FOREIGN_PER_QUOTE", "QUOTE_PER_FOREIGN"],

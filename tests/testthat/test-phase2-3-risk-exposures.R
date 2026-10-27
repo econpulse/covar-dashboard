@@ -157,6 +157,73 @@ test_that("PSD regularization, permutation invariance, collinearity, zero-varian
   expect_equal(nrow(sp_audit), 1L)
   expect_lt(sp_audit$true_obs, sp_audit$donor_obs)
   expect_gt(sp_audit$residual_vol_ann, 0.0)
+  expect_true("selection_mode" %in% names(mod_fac$factor_audit))
+})
+
+test_that("factor reconstruction supports automatic BIC donor selection, metadata Preferred_Donors, and inactive donor series", {
+  wb <- read_input_workbook(TEST_DATA_PATH, TEST_CONFIG)
+
+  meta_dt <- data.table::as.data.table(wb$meta_raw)
+  long_dt <- data.table::as.data.table(wb$long_data)
+
+  # 1. Add an inactive benchmark series with long history (intended strictly as a factor donor)
+  meta_donor <- data.table::copy(meta_dt[Code == "BMSW10Y(RI)"])
+  meta_donor[, Code := "BENCH_GLOBAL_AGG"]
+  meta_donor[, Name := "Global Aggregate Benchmark (Inactive Factor Donor)"]
+  meta_donor[, Active := FALSE]
+  meta_donor[, Is_Donor := TRUE]
+
+  data_donor <- data.table::copy(long_dt[Code == "BMUS10Y(RI)"])
+  data_donor[, Code := "BENCH_GLOBAL_AGG"]
+  data_donor[, value := value * 1.02]
+
+  # 2. Add an explicit Preferred_Donors to SPCHICC(RI)
+  meta_dt[Code == "SPCHICC(RI)", Preferred_Donors := "BMSW10Y(RI), BENCH_GLOBAL_AGG"]
+
+  meta_combined <- rbind(meta_dt, meta_donor, fill = TRUE)
+  data_combined <- rbind(long_dt, data_donor, fill = TRUE)
+
+  reg <- build_series_registry(data_combined, meta_combined, TEST_CONFIG, wb$file_hash, wb$path)
+  expect_true("BENCH_GLOBAL_AGG" %in% reg$donor_factor_codes)
+
+  spots <- normalize_spot_quotes(reg, TEST_CONFIG)
+  fwds <- normalize_forward_quotes(reg, spots, TEST_CONFIG)
+  cr <- cross_fx_levels(spots, fwds, "CHF")
+  u_b <- translate_asset_returns(index_levels_to_returns(reg$data, reg$meta), cr, reg$meta)
+  z_b <- build_forward_pnl(cr)
+
+  basis <- build_risk_basis(u_b, z_b, reg$meta, base_ccy = "CHF")
+  expect_true("BENCH_GLOBAL_AGG" %in% basis$donor_factor_ids)
+  expect_false("BENCH_GLOBAL_AGG" %in% basis$component_ids)
+
+  samp_fac <- resolve_estimation_sample(basis, list(window_mode = "FULL", missing_mode = "FACTOR_RECONSTRUCTION"))
+  expect_true("BENCH_GLOBAL_AGG" %in% colnames(samp_fac$X_full))
+  expect_false("BENCH_GLOBAL_AGG" %in% colnames(samp_fac$X_sample))
+
+  mod_fac <- estimate_covariance(samp_fac, method = "FACTOR_COMPLETED")
+  expect_true(mod_fac$valid)
+  expect_true(mod_fac$diagnostics$is_psd)
+
+  # Check that Sigma has exact component_ids dimension without the inactive donor
+  expect_equal(nrow(mod_fac$Sigma_monthly), length(basis$component_ids))
+  expect_false("BENCH_GLOBAL_AGG" %in% rownames(mod_fac$Sigma_monthly))
+
+  # SPCHICC(RI) should use metadata-specified donors including the inactive factor
+  sp_audit <- mod_fac$factor_audit[series_code == "SPCHICC(RI)"]
+  expect_equal(sp_audit$selection_mode, "METADATA_SPECIFIED")
+  expect_true(grepl("BENCH_GLOBAL_AGG", sp_audit$donors))
+
+  # Other short series without explicit metadata should use AUTO_BIC
+  jpm_audit <- mod_fac$factor_audit[series_code == "JPMGCOC(RI)"]
+  expect_equal(jpm_audit$selection_mode, "AUTO_BIC")
+  expect_gt(jpm_audit$r_squared, 0.50)
+
+  # 3. Check metadata warning when unknown code is given in Preferred_Donors
+  bad_meta <- data.table::copy(meta_dt)
+  bad_meta[Code == "SPCHICC(RI)", Preferred_Donors := "NON_EXISTENT_SERIES"]
+  val_res <- validate_metadata(bad_meta)
+  unk_issues <- Filter(function(x) identical(x$code, "UNKNOWN_PREFERRED_DONOR_CODE"), val_res$issues)
+  expect_gt(length(unk_issues), 0L)
 })
 
 test_that("5Y deterministic scenario paths compute proper rebalanced portfolio CAGR without weighting asset CAGRs", {
