@@ -21,6 +21,8 @@ export class AppStore {
       risk_settings: {},
       covariance_models: {},
       portfolios: {},
+      custom_portfolios: {},
+      carry_overrides: {},
       hedge_mode: 'ASSET_CLASS',
       hedge_configs: {
         ASSET_CLASS: { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} },
@@ -67,7 +69,39 @@ export class AppStore {
       state_version: 0
     };
 
+    // Load custom portfolios from localStorage if present
+    try {
+      const rawCustom = localStorage.getItem('MAPS_CUSTOM_PORTFOLIOS');
+      if (rawCustom) {
+        const parsed = JSON.parse(rawCustom);
+        if (parsed && typeof parsed === 'object') {
+          this.state.custom_portfolios = parsed;
+          this.state.portfolios = { ...(this.state.portfolios || {}), ...parsed };
+        }
+      }
+    } catch (e) {}
+
     this.listeners = new Set();
+  }
+
+  saveCustomPortfolio(portId, name, weights) {
+    if (!this.state.custom_portfolios) this.state.custom_portfolios = {};
+    const pObj = { id: portId, name: name || portId, weights: { ...(weights || {}) }, is_custom: true };
+    this.state.custom_portfolios[portId] = pObj;
+    this.state.portfolios[portId] = pObj;
+    try {
+      localStorage.setItem('MAPS_CUSTOM_PORTFOLIOS', JSON.stringify(this.state.custom_portfolios));
+    } catch (e) {}
+  }
+
+  deleteCustomPortfolio(portId) {
+    if (this.state.custom_portfolios && this.state.custom_portfolios[portId]) {
+      delete this.state.custom_portfolios[portId];
+      delete this.state.portfolios[portId];
+      try {
+        localStorage.setItem('MAPS_CUSTOM_PORTFOLIOS', JSON.stringify(this.state.custom_portfolios));
+      } catch (e) {}
+    }
   }
 
   subscribe(fn) {
@@ -177,7 +211,7 @@ export class AppStore {
       this.state.rebalancing_rule = cfg.rebalancing_rule || this.state.rebalancing_rule;
       this.state.cost_bps_pa = typeof cfg.cost_bps_pa === 'number' ? cfg.cost_bps_pa : 0;
       this.state.risk_settings = cfg.risk_models || this.state.risk_settings;
-      this.state.portfolios = cfg.portfolios || this.state.portfolios;
+      this.state.portfolios = { ...(cfg.portfolios || {}), ...(this.state.custom_portfolios || {}) };
       this.state.hedge_mode = cfg.hedge_mode || this.state.hedge_mode;
       if (cfg.hedge_configs) {
         this.state.hedge_configs = cfg.hedge_configs;
@@ -205,6 +239,9 @@ export class AppStore {
 
     if (res.scenario_evaluation) {
       this.state.results.scenario_evaluation = res.scenario_evaluation;
+      if (res.scenario_evaluation.carry_overrides) {
+        this.state.carry_overrides = res.scenario_evaluation.carry_overrides;
+      }
     }
 
     if (res.comparison) {

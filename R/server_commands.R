@@ -230,8 +230,12 @@ run_full_evaluation_pipeline <- function(state,
                                          scenario_id = state$active_scenario_id,
                                          rebalancing_rule = state$rebalancing_rule,
                                          cost_bps_pa = state$cost_bps_pa,
+                                         carry_overrides = NULL,
                                          custom_risk_settings = NULL,
                                          include_all_models_comparison = TRUE) {
+  if (!identical(base_ccy, state$base_currency)) {
+    state$carry_overrides <- list()
+  }
   state$base_currency <- base_ccy
   state$return_mode <- return_mode
   state$active_model_id <- model_id
@@ -239,6 +243,9 @@ run_full_evaluation_pipeline <- function(state,
   state$active_scenario_id <- scenario_id
   state$rebalancing_rule <- rebalancing_rule
   state$cost_bps_pa <- as.numeric(cost_bps_pa %||% 0.0)
+  if (!is.null(carry_overrides)) {
+    state$carry_overrides <- as.list(carry_overrides)
+  }
 
   cov_bundle <- get_or_estimate_covariance(
     state = state,
@@ -330,7 +337,8 @@ run_full_evaluation_pipeline <- function(state,
       weights = round(w_vec, 10),
       hedge_config = hc,
       rebalancing_rule = rebalancing_rule,
-      cost_bps_pa = state$cost_bps_pa
+      cost_bps_pa = state$cost_bps_pa,
+      carry_overrides = state$carry_overrides
     ),
     counter_name = "scenario_evaluations",
     compute_fn = function() {
@@ -343,7 +351,8 @@ run_full_evaluation_pipeline <- function(state,
         scenario_id = scenario_id,
         rebalancing_rule = rebalancing_rule,
         cost_bps_pa = state$cost_bps_pa,
-        available_hedge_currencies = model$available_hedge_currencies
+        carry_overrides = state$carry_overrides,
+        available_hedge_currencies = model$supported_hedge_currencies %||% model$available_hedge_currencies
       )
     }
   )
@@ -448,7 +457,11 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
         uncertainty_description = scen_eval$uncertainty_description,
         metrics = scen_eval$metrics,
         yearly_path = scen_eval$yearly_path,
-        asset_table = scen_eval$asset_table
+        asset_table = scen_eval$asset_table,
+        carry_overrides = state$carry_overrides,
+        relevant_hedge_currencies = scen_eval$relevant_hedge_currencies,
+        available_hedge_currencies = scen_eval$available_hedge_currencies,
+        hedge_currency_summary = scen_eval$hedge_currency_summary
       )
     } else NULL,
     comparison = if (!is.null(comp_eval) && isTRUE(comp_eval$valid)) {
@@ -534,6 +547,23 @@ handle_app_command <- function(request, state) {
     # Optional active universe update from Data & Methodology view
     if (!is.null(payload$universe) && length(payload$universe) > 0L) {
       state$universe <- intersect(as.character(payload$universe), state$dataset$all_assets)
+    }
+    # Optional client-side custom portfolios sync (e.g. from localStorage)
+    if (!is.null(payload$custom_portfolios) && is.list(payload$custom_portfolios)) {
+      for (cp in payload$custom_portfolios) {
+        if (!is.null(cp$id) && nzchar(cp$id) && !(cp$id %in% c("saa_25", "saa_50", "saa_75"))) {
+          state$portfolios[[cp$id]] <- list(
+            id = cp$id,
+            name = cp$name %||% cp$id,
+            weights = as.list(cp$weights %||% list()),
+            is_custom = TRUE
+          )
+        }
+      }
+    }
+    # Optional carry overrides
+    if (!is.null(payload$carry_overrides)) {
+      state$carry_overrides <- as.list(payload$carry_overrides)
     }
     # Optional EUR pre-1999 cash proxy policy toggle
     if (!is.null(payload$allow_eur_cash_proxy)) {
@@ -623,6 +653,129 @@ handle_app_command <- function(request, state) {
     ))
   }
 
+  if (identical(cmd_type, "portfolio.save")) {
+    port_id <- as.character(payload$portfolio_id %||% state$active_portfolio_id)
+    port_name <- as.character(payload$name %||% "")
+    raw_w <- payload$weights
+    asset_ids <- state$current_model$asset_ids %||% state$dataset$active_assets
+    tpl_w <- state$portfolios[[port_id]]$weights %||% state$portfolios[[state$active_portfolio_id]]$weights
+    w_vec <- normalize_incoming_weights(raw_w, tpl_w, asset_ids)
+
+    if (!nzchar(port_name)) {
+      port_name <- state$portfolios[[port_id]]$name %||% port_id
+    }
+
+    state$portfolios[[port_id]] <- list(
+      id = port_id,
+      name = port_name,
+      weights = as.list(w_vec),
+      is_custom = !(port_id %in% c("saa_25", "saa_50", "saa_75"))
+    )
+    state$active_portfolio_id <- port_id
+
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      base_ccy = state$base_currency,
+      return_mode = state$return_mode,
+      model_id = state$active_model_id,
+      portfolio_id = port_id,
+      weights = as.list(w_vec),
+      hedge_config = payload$hedge_config %||% state$hedge_configs[[state$hedge_mode]],
+      scenario_id = state$active_scenario_id,
+      rebalancing_rule = state$rebalancing_rule,
+      cost_bps_pa = state$cost_bps_pa,
+      include_all_models_comparison = TRUE
+    )
+
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "portfolio.delete")) {
+    port_id <- as.character(payload$portfolio_id)
+    if (port_id %in% c("saa_25", "saa_50", "saa_75")) {
+      return(build_response_envelope(
+        request = request,
+        state = state,
+        status = "error",
+        result = NULL,
+        issues = list(make_issue("BUILTIN_PORTFOLIO_CANNOT_BE_DELETED", "ERROR", "Standard-Vorlagen (25%, 50%, 75%) können nicht gelöscht werden."))
+      ))
+    }
+
+    state$portfolios[[port_id]] <- NULL
+    if (identical(state$active_portfolio_id, port_id)) {
+      state$active_portfolio_id <- "saa_50"
+    }
+
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      base_ccy = state$base_currency,
+      return_mode = state$return_mode,
+      model_id = state$active_model_id,
+      portfolio_id = state$active_portfolio_id,
+      weights = state$portfolios[[state$active_portfolio_id]]$weights,
+      hedge_config = state$hedge_configs[[state$hedge_mode]],
+      include_all_models_comparison = TRUE
+    )
+
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "universe.toggle_asset")) {
+    aid <- as.character(payload$asset_id)
+    reg <- state$dataset
+    new_act <- TRUE
+    if (!is.null(reg) && !is.null(reg$meta)) {
+      idx <- which(reg$meta$Code == aid)
+      if (length(idx) > 0L) {
+        curr_act <- isTRUE(reg$meta$Active[idx[1L]])
+        new_act <- !curr_act
+        reg$meta[idx, Active := new_act]
+      }
+    }
+
+    new_univ <- state$dataset$meta[Active == TRUE & Series_Type == "ASSET_TR", Code]
+    state$universe <- sort(as.character(new_univ))
+    state$dataset$active_assets <- state$universe
+
+    cur_weights <- state$portfolios[[state$active_portfolio_id]]$weights
+    if (!is.null(cur_weights) && aid %in% names(cur_weights) && !new_act) {
+      cur_weights[[aid]] <- 0.0
+      state$portfolios[[state$active_portfolio_id]]$weights <- cur_weights
+    }
+
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      base_ccy = state$base_currency,
+      return_mode = state$return_mode,
+      model_id = state$active_model_id,
+      portfolio_id = state$active_portfolio_id,
+      weights = state$portfolios[[state$active_portfolio_id]]$weights,
+      hedge_config = state$hedge_configs[[state$hedge_mode]],
+      include_all_models_comparison = TRUE
+    )
+
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
   if (identical(cmd_type, "hedge.convert_mode")) {
     target_mode <- toupper(payload$target_mode %||% "CURRENCY_OVERLAY")
     fallback_pol <- toupper(payload$fallback_policy %||% "RESTORE_SAVED")
@@ -636,7 +789,8 @@ handle_app_command <- function(request, state) {
       weights = w_vec,
       meta = state$dataset$meta,
       base_ccy = state$base_currency,
-      available_hedge_currencies = state$current_model$available_hedge_currencies
+      available_hedge_currencies = state$current_model$supported_hedge_currencies %||% state$current_model$available_hedge_currencies,
+      fx_carry = state$current_model$latest_carry
     )
     curr_hc <- normalize_incoming_hedge_config(payload$hedge_config, state)
     converted <- convert_hedge_mode(
@@ -697,6 +851,10 @@ handle_app_command <- function(request, state) {
         }
       }
       state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
+    }
+
+    if (!is.null(payload$carry_overrides)) {
+      state$carry_overrides <- as.list(payload$carry_overrides)
     }
 
     scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)

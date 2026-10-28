@@ -58,6 +58,13 @@ test_that("ASSET_CLASS and CURRENCY_OVERLAY yield identical portfolio return and
   expect_true(ev_class$metrics$total_hedge_notional > 0.10)
   expect_equal(sum(ev_class$weights), 1.0, tolerance = 1e-12)
 
+  # Currency exposure table includes latest annualized forward carry per currency
+  ccy_tbl <- ev_class$exposures$currency_table
+  expect_true("latest_carry_pa" %in% names(ccy_tbl))
+  expect_equal(ccy_tbl[fx_exposure == "CHF", latest_carry_pa], 0.0)
+  expect_true(!is.na(ccy_tbl[fx_exposure == "USD", latest_carry_pa]))
+  expect_true(is.na(ccy_tbl[fx_exposure == "EMEQ", latest_carry_pa]))
+
   # Negative risk contributions are preserved on hedging legs (which offset FX risk)
   hedge_rcs <- ev_class$component_contributions[component_type == "FX_HEDGE", risk_contribution_ann]
   expect_true(any(hedge_rcs < 0))

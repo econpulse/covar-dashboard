@@ -210,3 +210,115 @@ test_that("Performance budget: 30 assets, 10 hedge components, 600 months warm p
   expect_true(ev_sim$valid)
   expect_lt(elapsed_ms, 300.0) # Target budget: < 300 ms
 })
+
+test_that("Portfolio save/delete, universe toggle, and 5Y carry overrides work reliably", {
+  cache <- create_cache_manager(max_size_mb = 128)
+  st <- create_session_state(TEST_CONFIG, shared_cache = cache)
+  ld <- load_dataset_into_state(st, TEST_DATA_PATH, is_private = FALSE)
+  expect_true(ld$valid)
+
+  # 1. Bootstrap
+  resp_boot <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r1", type = "app.bootstrap",
+    context = list(base_currency = "CHF"),
+    payload = list(base_currency = "CHF", model_id = "shrinkage_long", portfolio_id = "saa_50")
+  ), st)
+  expect_equal(resp_boot$status, "ok")
+
+  # 2. Portfolio save: create a custom portfolio
+  w_custom <- list("MSSWITL(RI)" = 0.5, "BMSW10Y(RI)" = 0.5)
+  resp_save <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r2", type = "portfolio.save",
+    payload = list(portfolio_id = "port_custom_1", name = "Mein Test Portfolio", weights = w_custom)
+  ), st)
+  expect_equal(resp_save$status, "ok")
+  expect_true("port_custom_1" %in% names(st$portfolios))
+  expect_equal(st$active_portfolio_id, "port_custom_1")
+
+  # 3. Portfolio delete: cannot delete builtin template
+  resp_del_builtin <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r3", type = "portfolio.delete",
+    payload = list(portfolio_id = "saa_50")
+  ), st)
+  expect_equal(resp_del_builtin$status, "error")
+
+  # Delete custom portfolio
+  resp_del_custom <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r4", type = "portfolio.delete",
+    payload = list(portfolio_id = "port_custom_1")
+  ), st)
+  expect_equal(resp_del_custom$status, "ok")
+  expect_false("port_custom_1" %in% names(st$portfolios))
+  expect_equal(st$active_portfolio_id, "saa_50")
+
+  # 4. 5Y Carry overrides
+  resp_scen_ovr <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r5", type = "scenarios.evaluate",
+    payload = list(scenario_id = "base_5y", carry_overrides = list(USD = -0.015))
+  ), st)
+  expect_equal(resp_scen_ovr$status, "ok")
+  usd_asset_row <- st$current_scenario_eval$asset_table[fx_exposure == "USD"][1L]
+  expect_equal(usd_asset_row$avg_forward_carry_pa, -0.015)
+
+  # 5. Universe toggle asset
+  orig_len <- length(st$universe)
+  resp_tog <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r6", type = "universe.toggle_asset",
+    payload = list(asset_id = "GSGCTOT")
+  ), st)
+  expect_equal(resp_tog$status, "ok")
+  expect_false("GSGCTOT" %in% st$universe)
+  expect_equal(length(st$universe), orig_len - 1L)
+
+  # Toggle back
+  resp_tog_back <- handle_app_command(list(
+    protocol_version = 1L, request_id = "r7", type = "universe.toggle_asset",
+    payload = list(asset_id = "GSGCTOT")
+  ), st)
+  expect_equal(resp_tog_back$status, "ok")
+  expect_true("GSGCTOT" %in% st$universe)
+  expect_equal(length(st$universe), orig_len)
+})
+
+test_that("Dynamic hedge currency detection in CMAs works across base currencies (CHF, EUR, USD, GBP)", {
+  st <- create_session_state(TEST_CONFIG)
+  load_dataset_into_state(st, TEST_DATA_PATH)
+
+  # 1. Base CHF
+  res_chf <- run_full_evaluation_pipeline(st, base_ccy = "CHF")
+  pl_chf <- build_full_client_payload(st, res_chf)
+  sc_chf <- pl_chf$scenario_evaluation
+
+  expect_true(all(c("EUR", "USD") %in% sc_chf$relevant_hedge_currencies))
+  expect_false("CHF" %in% sc_chf$relevant_hedge_currencies)
+  expect_true(all(c("EUR", "USD", "GBP") %in% sc_chf$available_hedge_currencies))
+  expect_false("CHF" %in% sc_chf$available_hedge_currencies)
+
+  # 2. Base EUR: CHF is foreign, EUR is domestic
+  res_eur <- run_full_evaluation_pipeline(st, base_ccy = "EUR")
+  pl_eur <- build_full_client_payload(st, res_eur)
+  sc_eur <- pl_eur$scenario_evaluation
+
+  expect_true(all(c("CHF", "USD") %in% sc_eur$relevant_hedge_currencies))
+  expect_false("EUR" %in% sc_eur$relevant_hedge_currencies)
+  expect_true(all(c("CHF", "USD", "GBP") %in% sc_eur$available_hedge_currencies))
+  expect_false("EUR" %in% sc_eur$available_hedge_currencies)
+
+  # CHF in EUR should have positive forward carry (CHF rates lower than EUR) and be marked as needed
+  chf_idx <- which(vapply(sc_eur$hedge_currency_summary, function(x) identical(x$currency, "CHF"), logical(1)))
+  expect_true(length(chf_idx) == 1L)
+  chf_summary <- sc_eur$hedge_currency_summary[[chf_idx]]
+  expect_true(chf_summary$is_needed)
+  expect_true(chf_summary$forward_available)
+  expect_true(chf_summary$avg_forward_carry_pa > 0.01)
+
+  # 3. Base USD: CHF is foreign, USD is domestic
+  res_usd <- run_full_evaluation_pipeline(st, base_ccy = "USD")
+  pl_usd <- build_full_client_payload(st, res_usd)
+  sc_usd <- pl_usd$scenario_evaluation
+
+  expect_true(all(c("CHF", "EUR") %in% sc_usd$relevant_hedge_currencies))
+  expect_false("USD" %in% sc_usd$relevant_hedge_currencies)
+  expect_true(all(c("CHF", "EUR", "GBP") %in% sc_usd$available_hedge_currencies))
+  expect_false("USD" %in% sc_usd$available_hedge_currencies)
+})

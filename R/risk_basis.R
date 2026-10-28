@@ -94,6 +94,7 @@ build_risk_basis <- function(u,
     character(0)
   }
 
+  supported_hedge_ccys <- avail_z_ccys
   available_hedge_ccys <- intersect(required_hedge_ccys, avail_z_ccys)
   missing_hedge_ccys <- setdiff(required_hedge_ccys, avail_z_ccys)
 
@@ -217,6 +218,7 @@ build_risk_basis <- function(u,
     preferred_donors_meta = preferred_donors_meta,
     required_hedge_currencies = required_hedge_ccys,
     available_hedge_currencies = available_hedge_ccys,
+    supported_hedge_currencies = supported_hedge_ccys,
     missing_hedge_currencies = missing_hedge_ccys,
     dates = X_dt$date,
     month_keys = X_dt$month_key,
@@ -226,6 +228,7 @@ build_risk_basis <- function(u,
     X_table = X_dt,
     component_availability = comp_avail_dt,
     fx_audit_summary = fx_audit_summary,
+    latest_carry = if (!is.null(z$latest_carry)) z$latest_carry else list(),
     issues = issues
   )
   class(basis) <- c("maps_risk_basis", "list")
@@ -346,12 +349,14 @@ resolve_estimation_sample <- function(basis, settings = list()) {
     component_ids = comp_ids,
     required_hedge_currencies = basis$required_hedge_currencies,
     available_hedge_currencies = basis$available_hedge_currencies,
+    supported_hedge_currencies = basis$supported_hedge_currencies %||% basis$available_hedge_currencies,
     missing_hedge_currencies = basis$missing_hedge_currencies,
     component_availability = basis$component_availability,
     X_sample = X_sample,
     X_full = X_full_basis[selected_rows, , drop = FALSE],
     donor_factor_ids = basis$donor_factor_ids %||% character(0),
     preferred_donors_meta = basis$preferred_donors_meta %||% list(),
+    latest_carry = basis$latest_carry,
     month_keys = sample_months,
     all_month_keys = month_keys,
     issues = issues

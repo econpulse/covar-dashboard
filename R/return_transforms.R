@@ -137,10 +137,20 @@ build_forward_pnl <- function(crosses, cost_bps_pa = 0.0) {
     S_t, S_t_1, F_t_1, carry, spot_offset, tc_drag, z_gross, z_base = z_net
   )]
 
+  # Latest observed forward carry (annualized) for each currency
+  valid_fwd_dt <- dt[!is.na(S_b_per_c) & !is.na(F_b_per_c) & S_b_per_c > 0]
+  latest_carry_vec <- numeric(0)
+  if (nrow(valid_fwd_dt) > 0L) {
+    last_obs <- valid_fwd_dt[, .SD[month_index == max(month_index)], by = currency]
+    last_obs[, latest_carry_pa := ifelse(is_domestic, 0.0, (F_b_per_c / S_b_per_c - 1.0) * 12.0)]
+    latest_carry_vec <- stats::setNames(last_obs$latest_carry_pa, last_obs$currency)
+  }
+
   list(
     base_currency = base_ccy,
     cost_bps_pa = as.numeric(cost_bps_pa %||% 0.0),
     foreign_pnl = foreign_dt,
-    all_pnl = all_dt
+    all_pnl = all_dt,
+    latest_carry = latest_carry_vec
   )
 }

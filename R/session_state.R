@@ -33,6 +33,7 @@ create_session_state <- function(config, shared_cache = NULL) {
   state$hedge_configs <- config$default_hedge_configs
   state$saved_asset_class_config <- config$default_hedge_configs$ASSET_CLASS
   state$expectations <- validate_expectations(config$default_expectations)
+  state$carry_overrides <- list()
 
   # Active computed artifacts
   state$current_basis <- NULL

@@ -41,7 +41,8 @@ evaluate_portfolio <- function(weights,
     weights = w_full,
     meta = meta,
     base_ccy = model$base_currency,
-    available_hedge_currencies = model$available_hedge_currencies
+    available_hedge_currencies = model$supported_hedge_currencies %||% model$available_hedge_currencies,
+    fx_carry = model$latest_carry
   )
   hedges <- resolve_hedge_notionals(exp_pre, hedge_config = hedge_config)
 

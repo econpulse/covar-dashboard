@@ -13,6 +13,7 @@ evaluate_return_scenarios <- function(expectations,
                                       scenario_id = NULL,
                                       rebalancing_rule = NULL,
                                       cost_bps_pa = 0.0,
+                                      carry_overrides = NULL,
                                       available_hedge_currencies = NULL) {
   exp_obj <- if (inherits(expectations, "maps_expectations")) {
     expectations
@@ -75,8 +76,12 @@ evaluate_return_scenarios <- function(expectations,
   u_base_mat <- matrix(0.0, nrow = horizon, ncol = n_assets, dimnames = list(paste0("Y", seq_len(horizon)), asset_ids))
   z_ccy_list <- list()
 
-  all_ccys <- unique(c(base_ccy, asset_dt$return_currency, asset_dt$fx_exposure))
-  all_ccys <- setdiff(all_ccys, "EMEQ")
+  # Identify all foreign currencies that can be hedged (including available forwards CHF, EUR, GBP, USD)
+  all_fwd_supported <- unique(c("CHF", "EUR", "USD", "GBP", available_hedge_currencies))
+  all_fwd_supported <- setdiff(all_fwd_supported, c(base_ccy, "EMEQ", "EMFI"))
+
+  all_ccys <- unique(c(base_ccy, asset_dt$return_currency, asset_dt$fx_exposure, all_fwd_supported))
+  all_ccys <- setdiff(all_ccys, c("EMEQ", "EMFI"))
 
   for (ccy in all_ccys) {
     v_fac_c <- as.numeric(num_paths[[ccy]] %||% rep(1.0, horizon))
@@ -84,8 +89,14 @@ evaluate_return_scenarios <- function(expectations,
     # Cross rate growth factor S_y^(B/C) / S_{y-1}^(B/C) = (V_{C,y}/V_{C,y-1}) / (V_{B,y}/V_{B,y-1})
     s_growth <- if (identical(ccy, base_ccy)) rep(1.0, horizon) else (v_fac_c / v_factor_base)
     fx_ret <- s_growth - 1.0
-    # Covered interest parity forward carry: (1 + r_B) / (1 + r_C) - 1
-    carry_vec <- if (identical(ccy, base_ccy)) rep(0.0, horizon) else ((1.0 + r_short_base) / (1.0 + r_short_c) - 1.0)
+    # Covered interest parity forward carry or explicit user override:
+    carry_vec <- if (identical(ccy, base_ccy)) {
+      rep(0.0, horizon)
+    } else if (!is.null(carry_overrides) && ccy %in% names(carry_overrides) && !is.na(as.numeric(carry_overrides[[ccy]]))) {
+      rep(as.numeric(carry_overrides[[ccy]]), horizon)
+    } else {
+      ((1.0 + r_short_base) / (1.0 + r_short_c) - 1.0)
+    }
     spot_offset_vec <- -fx_ret
     tc_vec <- if (identical(ccy, base_ccy)) rep(0.0, horizon) else rep(cost_dec_pa, horizon)
     z_vec <- carry_vec + spot_offset_vec - tc_vec
@@ -138,6 +149,9 @@ evaluate_return_scenarios <- function(expectations,
       asset_class = asset_dt$asset_class[i],
       return_currency = asset_dt$return_currency[i],
       fx_exposure = exp_ccy,
+      is_domestic = asset_dt$is_domestic[i],
+      forward_available = asset_dt$forward_available[i],
+      hedge_eligible = asset_dt$hedge_eligible[i],
       weight = asset_dt$weight[i],
       applied_h = h_i,
       cagr_local_5y = cagr_local,
@@ -219,6 +233,38 @@ evaluate_return_scenarios <- function(expectations,
     wealth_local = wealth_local
   )
 
+  # Build structured summary of all foreign hedge currencies vs base_ccy
+  hedge_currency_summary <- lapply(all_fwd_supported, function(ccy) {
+    z_info <- z_ccy_list[[ccy]]
+    port_sub <- asset_dt[fx_exposure == ccy]
+    port_exp <- sum(port_sub$weight, na.rm = TRUE)
+    is_eligible <- any(port_sub$hedge_eligible == TRUE)
+    is_needed <- (port_exp > 1e-6) && is_eligible
+    applied_h_ratio <- if (nrow(port_sub) > 0L && sum(port_sub$weight, na.rm = TRUE) > 0) {
+      sum(port_sub$hedge_notional, na.rm = TRUE) / sum(port_sub$weight, na.rm = TRUE)
+    } else 0.0
+
+    avg_c <- if (!is.null(z_info)) mean(z_info$carry) else 0.0
+    is_ovr <- !is.null(carry_overrides) && ccy %in% names(carry_overrides) && !is.na(as.numeric(carry_overrides[[ccy]]))
+
+    list(
+      currency = ccy,
+      is_domestic = FALSE,
+      is_needed = is_needed,
+      forward_available = TRUE,
+      portfolio_exposure = port_exp,
+      applied_hedge_ratio = applied_h_ratio,
+      avg_forward_carry_pa = avg_c,
+      is_overridden = is_ovr
+    )
+  })
+
+  relevant_hedge_currencies <- vapply(
+    hedge_currency_summary[vapply(hedge_currency_summary, function(x) isTRUE(x$is_needed), logical(1))],
+    function(x) x$currency,
+    character(1)
+  )
+
   list(
     valid = TRUE,
     expectations_id = exp_obj$expectations_id,
@@ -243,6 +289,10 @@ evaluate_return_scenarios <- function(expectations,
     ),
     yearly_path = yearly_path_dt,
     asset_table = asset_scen_dt,
+    carry_overrides = carry_overrides,
+    relevant_hedge_currencies = relevant_hedge_currencies,
+    available_hedge_currencies = all_fwd_supported,
+    hedge_currency_summary = hedge_currency_summary,
     issues = exp_obj$issues
   )
 }

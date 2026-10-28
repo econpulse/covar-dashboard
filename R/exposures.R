@@ -8,7 +8,8 @@
 derive_prehedge_exposures <- function(weights,
                                       meta,
                                       base_ccy = "CHF",
-                                      available_hedge_currencies = NULL) {
+                                      available_hedge_currencies = NULL,
+                                      fx_carry = NULL) {
   issues <- list()
   meta_dt <- data.table::as.data.table(meta)
   asset_meta <- meta_dt[Series_Type == "ASSET_TR"]
@@ -61,7 +62,7 @@ derive_prehedge_exposures <- function(weights,
 
   if (is.null(available_hedge_currencies)) {
     avail_fwd_ccys <- meta_dt[Series_Type == "FX_FORWARD" & Active == TRUE, unique(Foreign_Currency)]
-    available_hedge_currencies <- setdiff(unique(c("USD", avail_fwd_ccys)), base_ccy)
+    available_hedge_currencies <- setdiff(unique(c("USD", "CHF", avail_fwd_ccys)), base_ccy)
   }
 
   asset_dt <- data.table::data.table(
@@ -98,8 +99,9 @@ derive_prehedge_exposures <- function(weights,
   )]
 
   # Aggregate currency exposure table before hedge
-  # Keep all relevant exposure buckets (base_ccy, USD, EUR, CHF, JPY, GBP, EMEQ) visible
-  all_exp_buckets <- unique(c(base_ccy, asset_dt$fx_exposure))
+  # Keep all relevant exposure buckets (base_ccy, available foreign hedge currencies, asset exposures) visible
+  all_exp_buckets <- unique(c(base_ccy, available_hedge_currencies, asset_dt$fx_exposure))
+  all_exp_buckets <- c(base_ccy, setdiff(all_exp_buckets, base_ccy))
   ccy_rows <- lapply(all_exp_buckets, function(ccy) {
     sub <- asset_dt[fx_exposure == ccy]
     e_before <- sum(sub$weight, na.rm = TRUE)
@@ -119,6 +121,14 @@ derive_prehedge_exposures <- function(weights,
       "HEDGEABLE"
     }
 
+    carry_val <- if (is_dom) {
+      0.0
+    } else if (!is.null(fx_carry) && ccy %in% names(fx_carry)) {
+      as.numeric(fx_carry[[ccy]])
+    } else {
+      NA_real_
+    }
+
     data.table::data.table(
       base_currency = base_ccy,
       fx_exposure = ccy,
@@ -129,6 +139,7 @@ derive_prehedge_exposures <- function(weights,
       exposure_before_hedge = e_before,
       hedgeable_exposure = e_hedgeable,
       non_hedgeable_exposure = e_locked,
+      latest_carry_pa = carry_val,
       contractual_overlay_exposure = sum(sub[is_contractual_overlay == TRUE, weight], na.rm = TRUE)
     )
   })

@@ -4,9 +4,9 @@
 // Connects AppStore, ShinyBridge, EChartsManager, and Workspace Components
 // ============================================================================
 
-import { AppStore } from './store.js?v=20261027_01';
-import { ShinyBridge } from './shiny-bridge.js?v=20261027_01';
-import { EChartsManager } from './charts/echarts-manager.js?v=20261027_01';
+import { AppStore } from './store.js?v=20261028_04';
+import { ShinyBridge } from './shiny-bridge.js?v=20261028_04';
+import { EChartsManager } from './charts/echarts-manager.js?v=20261028_04';
 import {
   el,
   clearAndAppend,
@@ -19,7 +19,7 @@ import {
   renderDataWorkspace,
   updateAllPortfolioKpis,
   updateWeightFooter
-} from './components/workspaces.js?v=20261027_01';
+} from './components/workspaces.js?v=20261028_04';
 
 const store = new AppStore();
 const bridge = new ShinyBridge(store);
@@ -187,7 +187,7 @@ function renderWorkspaceForTab(tabId) {
       renderComparisonWorkspace(store);
       break;
     case 'data':
-      renderDataWorkspace(store);
+      renderDataWorkspace(store, bridge);
       break;
   }
   dirtyTabs.delete(tabId);
@@ -254,6 +254,7 @@ function bindUIEvents() {
       const newCcy = btn.getAttribute('data-base-ccy');
       if (!newCcy || newCcy === store.state.base_currency) return;
       store.state.base_currency = newCcy;
+      store.state.carry_overrides = {};
       bridge.sendCommand('risk.estimate', {
         base_currency: newCcy,
         return_mode: store.state.return_mode,
@@ -280,6 +281,167 @@ function bindUIEvents() {
         weights: store.state.draft_weights,
         hedge_config: store.state.draft_hedge_config,
         cost_bps_pa: store.state.cost_bps_pa
+      });
+    });
+  }
+
+  // Custom Institutional Modal Dialog Helper
+  function showModal({ title, bodyHtml, confirmText = 'Bestätigen', confirmClass = 'btn-primary', cancelText = 'Abbrechen', onConfirm }) {
+    const modal = document.getElementById('modal_portfolio');
+    const titleEl = document.getElementById('modal_portfolio_title');
+    const bodyEl = document.getElementById('modal_portfolio_body');
+    const btnConfirm = document.getElementById('modal_portfolio_btn_confirm');
+    const btnCancel = document.getElementById('modal_portfolio_btn_cancel');
+
+    if (!modal || !titleEl || !bodyEl || !btnConfirm || !btnCancel) return;
+
+    titleEl.textContent = title;
+    bodyEl.innerHTML = bodyHtml;
+    btnConfirm.textContent = confirmText;
+    btnConfirm.className = `btn ${confirmClass}`;
+    btnCancel.textContent = cancelText;
+
+    modal.style.display = 'flex';
+
+    const inp = bodyEl.querySelector('input');
+    if (inp) {
+      setTimeout(() => { inp.focus(); inp.select(); }, 50);
+    }
+
+    const cleanup = () => {
+      modal.style.display = 'none';
+      btnConfirm.onclick = null;
+      btnCancel.onclick = null;
+      document.removeEventListener('keydown', handleKey);
+    };
+
+    const handleKey = (e) => {
+      if (e.key === 'Escape') {
+        cleanup();
+      } else if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+        btnConfirm.click();
+      }
+    };
+
+    document.addEventListener('keydown', handleKey);
+
+    btnCancel.onclick = () => {
+      cleanup();
+    };
+
+    btnConfirm.onclick = () => {
+      const shouldClose = onConfirm ? onConfirm(bodyEl) : true;
+      if (shouldClose !== false) {
+        cleanup();
+      }
+    };
+  }
+
+  // Portfolio Actions: Save (with confirmation), Save As New (modal input), Delete
+  const btnSavePort = document.getElementById('btn_save_portfolio');
+  if (btnSavePort) {
+    btnSavePort.addEventListener('click', () => {
+      const pid = store.state.active_portfolio_id;
+      const curPort = store.state.portfolios[pid];
+      const name = curPort?.name || pid;
+      const isBuiltin = ['saa_25', 'saa_50', 'saa_75'].includes(pid);
+
+      const warningHtml = isBuiltin
+        ? `<div style="padding: 8px 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; margin-bottom: 12px; color: #856404; font-size: var(--text-xs);">
+             <strong>Hinweis:</strong> Sie überschreiben die Standard-Vorlage <em>"${name}"</em> für die laufende Sitzung.
+           </div>`
+        : '';
+
+      showModal({
+        title: 'Portfolio-Änderungen speichern',
+        bodyHtml: `
+          ${warningHtml}
+          <p style="margin: 0 0 10px 0;">
+            Möchten Sie die geänderten Kapitalgewichte für <strong>"${name}"</strong> wirklich speichern?
+          </p>
+          <div style="font-size: var(--text-xs); color: var(--text-secondary);">
+            Bestehende Gewichte dieses Portfolios werden mit den aktuellen Eingaben überschrieben.
+          </div>
+        `,
+        confirmText: 'Ja, überschreiben',
+        confirmClass: 'btn-primary',
+        onConfirm: () => {
+          store.saveCustomPortfolio(pid, name, store.state.draft_weights);
+          bridge.sendCommand('portfolio.save', {
+            portfolio_id: pid,
+            name: name,
+            weights: store.state.draft_weights,
+            hedge_config: store.state.draft_hedge_config,
+            cost_bps_pa: store.state.cost_bps_pa
+          });
+          return true;
+        }
+      });
+    });
+  }
+
+  const btnNewPort = document.getElementById('btn_new_portfolio');
+  if (btnNewPort) {
+    btnNewPort.addEventListener('click', () => {
+      const defaultName = 'Meine SAA ' + new Date().toLocaleDateString('de-CH');
+      showModal({
+        title: 'Als neues Portfolio speichern',
+        bodyHtml: `
+          <div style="margin-bottom: 12px;">
+            <label for="inp_modal_port_name" style="display: block; font-weight: 600; margin-bottom: 6px;">Portfolio-Bezeichnung:</label>
+            <input type="text" id="inp_modal_port_name" class="form-control" style="width: 100%; padding: 8px 10px; font-size: var(--text-sm);" value="${defaultName}" />
+          </div>
+          <div style="font-size: var(--text-xs); color: var(--text-secondary);">
+            Die aktuellen Kapitalgewichte werden unter dieser neuen Bezeichnung gespeichert und in Tab 5 zum Vergleich herangezogen.
+          </div>
+        `,
+        confirmText: 'Portfolio anlegen',
+        confirmClass: 'btn-primary',
+        onConfirm: (bodyEl) => {
+          const inp = bodyEl.querySelector('#inp_modal_port_name');
+          const name = inp?.value?.trim();
+          if (!name) return false;
+          const newId = 'custom_' + Date.now();
+          store.saveCustomPortfolio(newId, name, store.state.draft_weights);
+          store.state.active_portfolio_id = newId;
+          bridge.sendCommand('portfolio.save', {
+            portfolio_id: newId,
+            name: name,
+            weights: store.state.draft_weights,
+            hedge_config: store.state.draft_hedge_config,
+            cost_bps_pa: store.state.cost_bps_pa
+          });
+          return true;
+        }
+      });
+    });
+  }
+
+  const btnDelPort = document.getElementById('btn_delete_portfolio');
+  if (btnDelPort) {
+    btnDelPort.addEventListener('click', () => {
+      const pid = store.state.active_portfolio_id;
+      if (['saa_25', 'saa_50', 'saa_75'].includes(pid)) return;
+      const curPort = store.state.portfolios[pid];
+      const name = curPort?.name || pid;
+
+      showModal({
+        title: 'Portfolio löschen',
+        bodyHtml: `
+          <p style="margin: 0 0 10px 0;">
+            Möchten Sie das Portfolio <strong>"${name}"</strong> unwiderruflich löschen?
+          </p>
+        `,
+        confirmText: 'Löschen',
+        confirmClass: 'btn-danger',
+        onConfirm: () => {
+          store.deleteCustomPortfolio(pid);
+          store.state.active_portfolio_id = 'saa_50';
+          bridge.sendCommand('portfolio.delete', {
+            portfolio_id: pid
+          });
+          return true;
+        }
       });
     });
   }
@@ -446,7 +608,7 @@ function bindUIEvents() {
   if (inpSearch) {
     inpSearch.addEventListener('input', e => {
       store.state.ui_filters.coverage_search = e.target.value;
-      renderDataWorkspace(store);
+      renderDataWorkspace(store, bridge);
     });
   }
 
@@ -454,7 +616,7 @@ function bindUIEvents() {
   if (selType) {
     selType.addEventListener('change', e => {
       store.state.ui_filters.coverage_type = e.target.value;
-      renderDataWorkspace(store);
+      renderDataWorkspace(store, bridge);
     });
   }
 

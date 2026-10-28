@@ -8,8 +8,8 @@
   <meta http-equiv="Expires" content="0" />
   <title>Multi-Asset Portfolio Studio</title>
   {{ headContent() }}
-  <link rel="stylesheet" href="css/tokens.css?v=20261027_01" />
-  <link rel="stylesheet" href="css/app.css?v=20261027_01" />
+  <link rel="stylesheet" href="css/tokens.css?v=20261028_05" />
+  <link rel="stylesheet" href="css/app.css?v=20261028_05" />
   <script src="vendor/echarts.min.js"></script>
   <script>
     window.__SHINY_MSG_BUFFER__ = window.__SHINY_MSG_BUFFER__ || [];
@@ -25,7 +25,7 @@
       } catch (e) {}
     }
   </script>
-  <script type="module" src="js/app.js?v=20261027_01"></script>
+  <script type="module" src="js/app.js?v=20261028_05"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -184,10 +184,11 @@
               <div class="btn-toolbar">
                 <label for="select_active_portfolio" class="context-label">Aktive SAA:</label>
                 <select id="select_active_portfolio" class="form-select">
-                  <option value="saa_25">SAA 25 (Konservativ - 25% Aktien)</option>
                   <option value="saa_50" selected>SAA 50 (Ausgewogen - 50% Aktien)</option>
-                  <option value="saa_75">SAA 75 (Wachstum - 75% Aktien)</option>
                 </select>
+                <button type="button" id="btn_save_portfolio" class="btn" title="Aktuelle Gewichte im ausgewählten Portfolio speichern">Speichern</button>
+                <button type="button" id="btn_new_portfolio" class="btn" title="Aktuelle Gewichte als neues Portfolio anlegen">Als Neu...</button>
+                <button type="button" id="btn_delete_portfolio" class="btn" style="display: none; color: var(--color-danger, #d9534f);" title="Ausgewähltes benutzerdefiniertes Portfolio löschen">Löschen</button>
                 <button type="button" class="btn" data-profile-saa="saa_25">Vorlage 25%</button>
                 <button type="button" class="btn" data-profile-saa="saa_50">Vorlage 50%</button>
                 <button type="button" class="btn" data-profile-saa="saa_75">Vorlage 75%</button>
@@ -283,8 +284,8 @@
                   <option value="RESTORE_SAVED" selected>Ursprüngliche Klassenkonfiguration wiederherstellen</option>
                   <option value="PROPORTIONAL">Proportionale Zuordnung aus Overlay übernehmen</option>
                 </select>
-                <label for="input_hedge_cost_bps" class="context-label">Hedge-Kosten (bps p.a.):</label>
-                <input type="number" id="input_hedge_cost_bps" class="form-control num-input" value="0" min="0" max="200" step="5" />
+                <label for="input_hedge_cost_bps" class="context-label" title="Zusätzliche Transaktionskosten / Bid-Ask-Spreads beim monatlichen Rollen. Der währungsspezifische Zins-Carry ist bereits automatisch in den Forward-Kursen enthalten.">Roll- / Transaktionskosten (bps p.a.):</label>
+                <input type="number" id="input_hedge_cost_bps" class="form-control num-input" value="0" min="0" max="200" step="5" title="Pauschale Ausführungskosten / Spreads in Basispunkten p.a. (Default: 0 bps)" />
               </div>
             </div>
             <div class="panel-body no-pad table-scroll">
@@ -295,6 +296,7 @@
                     <th class="num">Exposure vor Hedge E<sub>vor</sub></th>
                     <th class="num">Hedgefähiger Anteil</th>
                     <th class="num">Nicht hedgefähig / Gesperrt</th>
+                    <th class="num" title="Aktueller impliziter Carry aus den neuesten Spot- und 1M-Forward-Daten (annualisiert)">Aktueller Carry p.a.</th>
                     <th class="num">Hedgequote h</th>
                     <th class="num">Hedge-Nominal g</th>
                     <th class="num">Exposure nach Hedge E<sub>nach</sub></th>
@@ -539,6 +541,13 @@
                   <option value="BUY_AND_HOLD">Buy &amp; Hold (Gewichtsdrift)</option>
                 </select>
               </div>
+            </div>
+            <div style="padding: var(--space-3) var(--space-4); background: var(--surface-2); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3);">
+              <div>
+                <span style="font-weight: 600; font-size: var(--text-sm);">5J-Forward-Carry Annahmen p.a. (Hedgekosten):</span>
+                <span style="font-size: var(--text-xs); color: var(--text-secondary); margin-left: var(--space-2);">Freie Vorgabe der jährlichen Absicherungskosten (überschreibt Standard-CIP)</span>
+              </div>
+              <div id="cma_carry_controls" style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;"></div>
             </div>
             <div class="grid-2col" style="padding: var(--space-4);">
               <div class="table-scroll">
@@ -793,6 +802,20 @@
         </section>
       </div>
     </main>
+  </div>
+
+  <!-- Custom Institutional Modal Dialog for Portfolio Save / Save As / Confirmation -->
+  <div id="modal_portfolio" class="modal-backdrop" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal_portfolio_title" class="modal-title">Portfolio speichern</h3>
+      </div>
+      <div class="modal-body" id="modal_portfolio_body"></div>
+      <div class="modal-footer">
+        <button type="button" id="modal_portfolio_btn_cancel" class="btn">Abbrechen</button>
+        <button type="button" id="modal_portfolio_btn_confirm" class="btn btn-primary">Bestätigen</button>
+      </div>
+    </div>
   </div>
 </body>
 </html>

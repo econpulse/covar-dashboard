@@ -70,7 +70,8 @@ export class ShinyBridge {
         this.sendCommand('app.bootstrap', {
           base_currency: this.store.state.base_currency,
           model_id: this.store.state.active_model_id,
-          portfolio_id: this.store.state.active_portfolio_id
+          portfolio_id: this.store.state.active_portfolio_id,
+          custom_portfolios: Object.values(this.store.state.custom_portfolios || {})
         });
       } else if (wasReconnecting && this.store.state.dirty_flags.has_unapplied_changes) {
         // Reconcile draft changes on reconnect without triggering heavy background jobs
@@ -122,7 +123,8 @@ export class ShinyBridge {
           this.sendCommand('app.bootstrap', {
             base_currency: this.store.state.base_currency,
             model_id: this.store.state.active_model_id,
-            portfolio_id: this.store.state.active_portfolio_id
+            portfolio_id: this.store.state.active_portfolio_id,
+            custom_portfolios: Object.values(this.store.state.custom_portfolios || {})
           });
         }
         return true;

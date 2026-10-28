@@ -145,6 +145,30 @@ export function renderPortfolioTriggers(store, bridge) {
   // Update KPI summary cards across all workspaces with user inputs
   updateAllPortfolioKpis(store);
 
+  // Dynamic portfolio selector population & delete button visibility
+  const selPort = document.getElementById('select_active_portfolio');
+  const btnDel = document.getElementById('btn_delete_portfolio');
+  if (selPort && st.portfolios) {
+    const portIds = Object.keys(st.portfolios);
+    const existingIds = Array.from(selPort.options).map(o => o.value);
+    const needsRebuild = portIds.length !== existingIds.length || portIds.some((id, i) => id !== existingIds[i]);
+    if (needsRebuild) {
+      selPort.innerHTML = '';
+      for (const pid of portIds) {
+        const p = st.portfolios[pid];
+        const opt = document.createElement('option');
+        opt.value = pid;
+        opt.textContent = p.name || pid;
+        selPort.appendChild(opt);
+      }
+    }
+    selPort.value = st.active_portfolio_id;
+    if (btnDel) {
+      const isBuiltin = ['saa_25', 'saa_50', 'saa_75'].includes(st.active_portfolio_id);
+      btnDel.style.display = isBuiltin ? 'none' : 'inline-block';
+    }
+  }
+
   // Render SAA Portfolio Editor Table
   const tbody = document.getElementById('portfolio_weights_tbody');
   const tfoot = document.getElementById('portfolio_weights_tfoot');
@@ -390,11 +414,24 @@ export function renderCurrenciesWorkspace(store, bridge) {
         ? el('span', { className: 'tag tag-overlay', style: { marginLeft: '6px' }, textContent: `inkl. ${fmtPct(row.contractual_overlay_exposure, 1)} Futures-Nominal` })
         : null;
 
+      let carryCell;
+      if (isDom) {
+        carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '0.00 %' });
+      } else if (!fwdOk || isEmeq || row.latest_carry_pa === null || row.latest_carry_pa === undefined || Number.isNaN(Number(row.latest_carry_pa))) {
+        carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '-' });
+      } else {
+        const carryVal = Number(row.latest_carry_pa);
+        const carryFormatted = fmtPct(carryVal, 2);
+        const carryColor = carryVal < -1e-5 ? 'var(--color-danger, #d9534f)' : (carryVal > 1e-5 ? 'var(--color-success, #28a745)' : 'inherit');
+        carryCell = el('td', { className: 'num', style: { fontWeight: '600', color: carryColor }, textContent: carryFormatted });
+      }
+
       return el('tr', {}, [
         el('td', { className: 'sticky-col', style: { fontWeight: '700', fontFamily: 'var(--font-mono)' } }, [ccy, overlayNote]),
         el('td', { className: 'num', textContent: fmtPct(row.exposure_before_hedge, 2) }),
         el('td', { className: 'num', textContent: fmtPct(row.hedgeable_exposure, 2) }),
         el('td', { className: 'num', textContent: fmtPct(row.non_hedgeable_exposure, 2) }),
+        carryCell,
         ratioCell,
         el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 2) }),
         el('td', { className: 'num', style: { fontWeight: '600' }, textContent: fmtPct(row.exposure_after_hedge, 2) }),
@@ -590,6 +627,112 @@ export function renderScenariosWorkspace(store, bridge) {
   setTxt('scen_kpi_hedge_effect', fmtPct(scEval.metrics?.scenario_hedge_effect_pa, 2));
   setTxt('scen_uncertainty_note', scEval.uncertainty_description || '');
 
+  // 5Y Forward-Carry overrides controls (dynamically detected for base currency)
+  const carryControls = document.getElementById('cma_carry_controls');
+  if (carryControls && scEval) {
+    let summaryList = Array.isArray(scEval.hedge_currency_summary) && scEval.hedge_currency_summary.length > 0
+      ? scEval.hedge_currency_summary
+      : null;
+
+    if (!summaryList) {
+      // Fallback: derive from available_hedge_currencies and asset_table
+      const avail = Array.isArray(scEval.available_hedge_currencies) && scEval.available_hedge_currencies.length > 0
+        ? scEval.available_hedge_currencies
+        : ['CHF', 'EUR', 'USD', 'GBP'].filter(c => c !== st.base_currency);
+
+      summaryList = avail.map(c => {
+        const match = Array.isArray(scEval.asset_table) ? scEval.asset_table.find(r => r.fx_exposure === c) : null;
+        return {
+          currency: c,
+          is_needed: Boolean(match && !match.is_domestic && match.hedge_eligible && Number(match.weight || 0) > 0.0005),
+          portfolio_exposure: match ? Number(match.weight || 0) : 0,
+          avg_forward_carry_pa: match ? Number(match.avg_forward_carry_pa || 0) : 0
+        };
+      });
+    }
+
+    // Exclude domestic currency: base currency is never hedged!
+    const fwdItems = summaryList.filter(item => item.currency !== st.base_currency);
+    const nodes = [];
+
+    for (const item of fwdItems) {
+      const ccy = item.currency;
+      const hasOvr = Boolean(st.carry_overrides && typeof st.carry_overrides[ccy] !== 'undefined');
+      const currentVal = hasOvr ? Number(st.carry_overrides[ccy]) : Number(item.avg_forward_carry_pa || 0);
+      const valPct = (currentVal * 100).toFixed(2);
+      const isNeeded = Boolean(item.is_needed);
+      const portExp = item.portfolio_exposure != null ? Number(item.portfolio_exposure) : 0;
+      const expText = portExp > 0.0005 ? ` (${(portExp * 100).toFixed(0)}%)` : '';
+
+      const inp = el('input', {
+        type: 'number',
+        className: 'form-control num-input',
+        style: {
+          width: '75px',
+          fontWeight: hasOvr ? '700' : '500',
+          borderColor: hasOvr ? 'var(--color-primary, #1a73e8)' : ''
+        },
+        step: '0.1',
+        min: '-20',
+        max: '20',
+        value: valPct,
+        'aria-label': `5J Carry Annahme p.a. für ${ccy}`,
+        onChange: e => {
+          const val = Number(e.target.value || 0) / 100.0;
+          if (!st.carry_overrides) st.carry_overrides = {};
+          st.carry_overrides[ccy] = val;
+          bridge.sendCommand('scenarios.evaluate', {
+            scenario_id: st.active_scenario_id,
+            rebalancing_rule: st.rebalancing_rule,
+            carry_overrides: st.carry_overrides
+          });
+        }
+      });
+
+      nodes.push(el('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          fontSize: 'var(--text-xs)',
+          padding: '2px 6px',
+          borderRadius: 'var(--radius-sm)',
+          background: isNeeded ? 'rgba(26, 115, 232, 0.07)' : 'transparent',
+          border: isNeeded ? '1px solid var(--border-color)' : '1px dashed var(--border-color)'
+        },
+        title: isNeeded ? `Währung im Portfolio aktiv${expText}` : 'Währung aktuell nicht im Portfolio gehalten'
+      }, [
+        el('strong', {
+          style: { color: isNeeded ? 'var(--text-primary)' : 'var(--text-secondary)' },
+          textContent: `${ccy}${expText}: `
+        }),
+        inp,
+        el('span', { textContent: '% p.a.' })
+      ]));
+    }
+
+    if (st.carry_overrides && Object.keys(st.carry_overrides).length > 0) {
+      const btnReset = el('button', {
+        type: 'button',
+        className: 'btn btn-sm',
+        style: { fontSize: '11px', padding: '2px 8px' },
+        textContent: 'Reset CIP',
+        title: 'Manuelle Carry-Overrides zurücksetzen auf Standard-CIP',
+        onClick: () => {
+          st.carry_overrides = {};
+          bridge.sendCommand('scenarios.evaluate', {
+            scenario_id: st.active_scenario_id,
+            rebalancing_rule: st.rebalancing_rule,
+            carry_overrides: {}
+          });
+        }
+      });
+      nodes.push(btnReset);
+    }
+
+    clearAndAppend(carryControls, nodes);
+  }
+
   const tbody = document.getElementById('scenario_assets_tbody');
   if (tbody && Array.isArray(scEval.asset_table)) {
     const rows = scEval.asset_table.map(row => {
@@ -686,7 +829,7 @@ export function renderComparisonWorkspace(store) {
 // ----------------------------------------------------------------------------
 // 6. Data, Coverage, Factor/Forward Audit & Methodology Workspace
 // ----------------------------------------------------------------------------
-export function renderDataWorkspace(store) {
+export function renderDataWorkspace(store, bridge) {
   const st = store.state;
   const ds = st.dataset;
   if (!ds) return;
@@ -719,11 +862,41 @@ export function renderDataWorkspace(store) {
 
     const rows = filtered.map(m => {
       const gaps = Number(m.Interior_Gaps || 0);
+
+      let statusCell;
+      if (m.Series_Type === 'ASSET_TR') {
+        const isActive = Boolean(m.Active);
+        statusCell = el('button', {
+          type: 'button',
+          className: 'btn btn-sm',
+          style: {
+            fontSize: '11px',
+            padding: '2px 8px',
+            cursor: 'pointer',
+            fontWeight: '600',
+            borderRadius: '12px',
+            background: isActive ? 'var(--color-success-bg, #e6f4ea)' : 'var(--surface-2, #f1f3f4)',
+            color: isActive ? 'var(--color-success, #137333)' : 'var(--text-muted, #70757a)',
+            border: `1px solid ${isActive ? 'var(--color-success, #137333)' : 'var(--border-color, #dadce0)'}`
+          },
+          title: isActive ? 'Klicken, um Datenreihe zu deaktivieren' : 'Klicken, um Datenreihe zu aktivieren',
+          textContent: isActive ? '✓ Aktiv' : '○ Inaktiv',
+          onClick: e => {
+            e.stopPropagation();
+            if (bridge) {
+              bridge.sendCommand('universe.toggle_asset', { asset_id: m.Code });
+            }
+          }
+        });
+      } else {
+        statusCell = el('span', { className: m.Active ? 'tag tag-ok' : 'tag tag-domestic', textContent: m.Active ? 'Aktiv' : 'Inaktiv' });
+      }
+
       return el('tr', {}, [
         el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: m.Code }),
         el('td', { textContent: m.Name }),
         el('td', {}, el('span', { className: 'tag', textContent: m.Series_Type })),
-        el('td', {}, el('span', { className: m.Active ? 'tag tag-ok' : 'tag tag-domestic', textContent: m.Active ? 'Aktiv' : 'Inaktiv' })),
+        el('td', {}, statusCell),
         el('td', { textContent: m.Return_Currency || m.Foreign_Currency || m.Cash_Currency || '-' }),
         el('td', { textContent: m.FX_Exposure || m.Quote_Direction || m.Proxy_Type || '-' }),
         el('td', { className: 'num', textContent: m.Start_Month || '-' }),
