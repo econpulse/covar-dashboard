@@ -87,13 +87,17 @@ load_dataset_into_state <- function(state, workbook_path, is_private = FALSE) {
       spots <- normalize_spot_quotes(reg, state$config)
       fwds <- normalize_forward_quotes(reg, spots, state$config)
       cash <- build_cash_returns(reg, state$config)
+      cash_tr <- build_cash_tr_series(cash, reg, state$config)
+      if (isTRUE(cash_tr$valid) && nrow(cash_tr$data) > 0L) {
+        reg <- attach_cash_tr_to_registry(reg, cash_tr)
+      }
       list(
         valid = reg$valid && spots$valid && fwds$valid,
         registry = reg,
         spots = spots,
         forwards = fwds,
         cash = cash,
-        issues = c(wb$issues, reg$issues, spots$issues, fwds$issues, cash$issues)
+        issues = c(wb$issues, reg$issues, spots$issues, fwds$issues, cash$issues, cash_tr$issues)
       )
     }
   )

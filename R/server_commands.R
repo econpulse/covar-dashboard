@@ -569,6 +569,10 @@ handle_app_command <- function(request, state) {
     if (!is.null(payload$allow_eur_cash_proxy)) {
       state$config$cash_proxy_config$EUR$allow_pre_1999_proxy <- isTRUE(payload$allow_eur_cash_proxy)
       state$cash <- build_cash_returns(state$dataset, state$config)
+      cash_tr <- build_cash_tr_series(state$cash, state$dataset, state$config)
+      if (isTRUE(cash_tr$valid) && nrow(cash_tr$data) > 0L) {
+        state$dataset <- attach_cash_tr_to_registry(state$dataset, cash_tr)
+      }
     }
 
     res <- run_full_evaluation_pipeline(

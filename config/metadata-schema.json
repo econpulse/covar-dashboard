@@ -47,6 +47,6 @@
     "Asset_Class": ["EQUITY", "BOND", "REAL_ESTATE", "GOLD", "COMMODITY", "CASH", "ALTERNATIVE"],
     "Quote_Direction": ["FOREIGN_PER_QUOTE", "QUOTE_PER_FOREIGN"],
     "Forward_Type": ["OUTRIGHT", "POINTS"],
-    "Return_Structure": ["EQUITY_TR", "BOND_TR", "LISTED_FUND_TR", "FUTURES_TR", "PHYSICAL_TR", "PRICE_INDEX"]
+    "Return_Structure": ["EQUITY_TR", "BOND_TR", "LISTED_FUND_TR", "FUTURES_TR", "PHYSICAL_TR", "PRICE_INDEX", "CASH_TR"]
   }
 }

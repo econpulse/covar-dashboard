@@ -115,7 +115,13 @@ evaluate_return_scenarios <- function(expectations,
     aid <- asset_ids[i]
     ret_ccy <- asset_dt$return_currency[i]
     aa <- scen$asset_assumptions[[aid]]
-    r_loc <- if (!is.null(aa)) as.numeric(aa$annual_local_returns) else rep(0.0, horizon)
+    r_loc <- if (!is.null(aa)) {
+      as.numeric(aa$annual_local_returns)
+    } else if (identical(asset_dt$asset_class[i], "CASH") && ret_ccy %in% names(short_rates)) {
+      as.numeric(short_rates[[ret_ccy]])
+    } else {
+      rep(0.0, horizon)
+    }
     fx_r <- z_ccy_list[[ret_ccy]]$fx_return %||% rep(0.0, horizon)
     # Multiplicative translation: u_{i,y}^B = (1 + r_{L,i,y}) * (1 + fx_{C,y}^B) - 1
     u_b <- (1.0 + r_loc) * (1.0 + fx_r) - 1.0
