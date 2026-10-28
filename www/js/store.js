@@ -84,14 +84,55 @@ export class AppStore {
     this.listeners = new Set();
   }
 
-  saveCustomPortfolio(portId, name, weights) {
+  saveCustomPortfolio(portId, name, weights, hedgeConfig = null) {
     if (!this.state.custom_portfolios) this.state.custom_portfolios = {};
-    const pObj = { id: portId, name: name || portId, weights: { ...(weights || {}) }, is_custom: true };
+    const pObj = {
+      id: portId,
+      name: name || portId,
+      weights: { ...(weights || {}) },
+      hedge_config: hedgeConfig ? JSON.parse(JSON.stringify(hedgeConfig)) : null,
+      is_custom: true
+    };
     this.state.custom_portfolios[portId] = pObj;
     this.state.portfolios[portId] = pObj;
     try {
       localStorage.setItem('MAPS_CUSTOM_PORTFOLIOS', JSON.stringify(this.state.custom_portfolios));
     } catch (e) {}
+  }
+
+  selectPortfolio(portId, bridge) {
+    this.state.active_portfolio_id = portId;
+    const tpl = this.state.portfolios?.[portId];
+    if (tpl) {
+      if (tpl.weights) {
+        this.state.draft_weights = { ...tpl.weights };
+      }
+      if (tpl.hedge_config) {
+        const hc = tpl.hedge_config;
+        if (hc.mode) {
+          this.state.hedge_mode = hc.mode;
+        }
+        if (hc.configs) {
+          if (hc.configs.ASSET_CLASS) {
+            this.state.hedge_configs.ASSET_CLASS = JSON.parse(JSON.stringify(hc.configs.ASSET_CLASS));
+          }
+          if (hc.configs.CURRENCY_OVERLAY) {
+            this.state.hedge_configs.CURRENCY_OVERLAY = JSON.parse(JSON.stringify(hc.configs.CURRENCY_OVERLAY));
+          }
+        }
+        this.state.draft_hedge_config = JSON.parse(JSON.stringify(hc));
+      } else {
+        this.state.draft_hedge_config = JSON.parse(
+          JSON.stringify(this.state.hedge_configs[this.state.hedge_mode] || {})
+        );
+      }
+    }
+    bridge.sendCommand('portfolio.evaluate', {
+      portfolio_id: portId,
+      weights: this.state.draft_weights,
+      hedge_config: this.state.draft_hedge_config,
+      cost_bps_pa: this.state.cost_bps_pa
+    });
   }
 
   deleteCustomPortfolio(portId) {
@@ -232,9 +273,14 @@ export class AppStore {
       this.state.results.portfolio_evaluation = res.portfolio_evaluation;
       this.state.results.preview_evaluation = null;
       this.state.draft_weights = { ...(res.portfolio_evaluation.weights || {}) };
-      this.state.draft_hedge_config = JSON.parse(
-        JSON.stringify(this.state.hedge_configs[this.state.hedge_mode] || {})
-      );
+      const curPort = this.state.portfolios?.[this.state.active_portfolio_id];
+      if (curPort && curPort.hedge_config) {
+        this.state.draft_hedge_config = JSON.parse(JSON.stringify(curPort.hedge_config));
+      } else {
+        this.state.draft_hedge_config = JSON.parse(
+          JSON.stringify(this.state.hedge_configs[this.state.hedge_mode] || {})
+        );
+      }
     }
 
     if (res.scenario_evaluation) {

@@ -266,22 +266,41 @@ function bindUIEvents() {
     });
   });
 
+  // Helper to compile comprehensive hedge config for portfolio saving (preserving both modes and details)
+  function getFullHedgeConfigToSave() {
+    const st = store.state;
+    const activeMode = st.hedge_mode || st.draft_hedge_config?.mode || 'ASSET_CLASS';
+
+    const classConfig = JSON.parse(JSON.stringify(
+      (st.draft_hedge_config?.mode === 'ASSET_CLASS' ? st.draft_hedge_config : null) ||
+      st.hedge_configs?.ASSET_CLASS ||
+      { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} }
+    ));
+
+    const overlayConfig = JSON.parse(JSON.stringify(
+      (st.draft_hedge_config?.mode === 'CURRENCY_OVERLAY' ? st.draft_hedge_config : null) ||
+      st.hedge_configs?.CURRENCY_OVERLAY ||
+      { mode: 'CURRENCY_OVERLAY', currency_ratios: {} }
+    ));
+
+    return {
+      mode: activeMode,
+      class_ratios: classConfig.class_ratios || {},
+      asset_overrides: classConfig.asset_overrides || {},
+      currency_ratios: overlayConfig.currency_ratios || {},
+      configs: {
+        ASSET_CLASS: classConfig,
+        CURRENCY_OVERLAY: overlayConfig
+      }
+    };
+  }
+
   // Portfolio selector & 25/50/75 profile quick buttons
   const selPort = document.getElementById('select_active_portfolio');
   if (selPort) {
     selPort.addEventListener('change', e => {
       const pid = e.target.value;
-      store.state.active_portfolio_id = pid;
-      const tpl = store.state.portfolios[pid];
-      if (tpl && tpl.weights) {
-        store.state.draft_weights = { ...tpl.weights };
-      }
-      bridge.sendCommand('portfolio.evaluate', {
-        portfolio_id: pid,
-        weights: store.state.draft_weights,
-        hedge_config: store.state.draft_hedge_config,
-        cost_bps_pa: store.state.cost_bps_pa
-      });
+      store.selectPortfolio(pid, bridge);
     });
   }
 
@@ -357,21 +376,22 @@ function bindUIEvents() {
         bodyHtml: `
           ${warningHtml}
           <p style="margin: 0 0 10px 0;">
-            Möchten Sie die geänderten Kapitalgewichte für <strong>"${name}"</strong> wirklich speichern?
+            Möchten Sie die geänderten Kapital- und Hedgequoten für <strong>"${name}"</strong> wirklich speichern?
           </p>
           <div style="font-size: var(--text-xs); color: var(--text-secondary);">
-            Bestehende Gewichte dieses Portfolios werden mit den aktuellen Eingaben überschrieben.
+            Bestehende Gewichte und Währungsabsicherungen dieses Portfolios werden mit den aktuellen Eingaben überschrieben.
           </div>
         `,
         confirmText: 'Ja, überschreiben',
         confirmClass: 'btn-primary',
         onConfirm: () => {
-          store.saveCustomPortfolio(pid, name, store.state.draft_weights);
+          const hcToSave = getFullHedgeConfigToSave();
+          store.saveCustomPortfolio(pid, name, store.state.draft_weights, hcToSave);
           bridge.sendCommand('portfolio.save', {
             portfolio_id: pid,
             name: name,
             weights: store.state.draft_weights,
-            hedge_config: store.state.draft_hedge_config,
+            hedge_config: hcToSave,
             cost_bps_pa: store.state.cost_bps_pa
           });
           return true;
@@ -392,7 +412,7 @@ function bindUIEvents() {
             <input type="text" id="inp_modal_port_name" class="form-control" style="width: 100%; padding: 8px 10px; font-size: var(--text-sm);" value="${defaultName}" />
           </div>
           <div style="font-size: var(--text-xs); color: var(--text-secondary);">
-            Die aktuellen Kapitalgewichte werden unter dieser neuen Bezeichnung gespeichert und in Tab 5 zum Vergleich herangezogen.
+            Die aktuellen Kapital- und Hedgequoten werden unter dieser neuen Bezeichnung gespeichert und in Tab 5 zum Vergleich herangezogen.
           </div>
         `,
         confirmText: 'Portfolio anlegen',
@@ -402,13 +422,14 @@ function bindUIEvents() {
           const name = inp?.value?.trim();
           if (!name) return false;
           const newId = 'custom_' + Date.now();
-          store.saveCustomPortfolio(newId, name, store.state.draft_weights);
+          const hcToSave = getFullHedgeConfigToSave();
+          store.saveCustomPortfolio(newId, name, store.state.draft_weights, hcToSave);
           store.state.active_portfolio_id = newId;
           bridge.sendCommand('portfolio.save', {
             portfolio_id: newId,
             name: name,
             weights: store.state.draft_weights,
-            hedge_config: store.state.draft_hedge_config,
+            hedge_config: hcToSave,
             cost_bps_pa: store.state.cost_bps_pa
           });
           return true;
@@ -449,17 +470,7 @@ function bindUIEvents() {
   document.querySelectorAll('[data-profile-saa]').forEach(btn => {
     btn.addEventListener('click', () => {
       const pid = btn.getAttribute('data-profile-saa');
-      store.state.active_portfolio_id = pid;
-      const tpl = store.state.portfolios[pid];
-      if (tpl && tpl.weights) {
-        store.state.draft_weights = { ...tpl.weights };
-      }
-      bridge.sendCommand('portfolio.evaluate', {
-        portfolio_id: pid,
-        weights: store.state.draft_weights,
-        hedge_config: store.state.draft_hedge_config,
-        cost_bps_pa: store.state.cost_bps_pa
-      });
+      store.selectPortfolio(pid, bridge);
     });
   });
 

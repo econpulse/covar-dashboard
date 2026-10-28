@@ -401,6 +401,9 @@ export function renderCurrenciesWorkspace(store, bridge) {
               st.draft_hedge_config = { mode: 'CURRENCY_OVERLAY', currency_ratios: { ...(exp.derived_currency_ratios || {}) } };
             }
             st.draft_hedge_config.currency_ratios[ccy] = hVal;
+            if (!st.hedge_configs.CURRENCY_OVERLAY) st.hedge_configs.CURRENCY_OVERLAY = { mode: 'CURRENCY_OVERLAY', currency_ratios: {} };
+            if (!st.hedge_configs.CURRENCY_OVERLAY.currency_ratios) st.hedge_configs.CURRENCY_OVERLAY.currency_ratios = {};
+            st.hedge_configs.CURRENCY_OVERLAY.currency_ratios[ccy] = hVal;
             bridge.sendDebounced('portfolio.evaluate', {
               portfolio_id: st.active_portfolio_id,
               weights: st.draft_weights,
@@ -477,6 +480,9 @@ export function renderCurrenciesWorkspace(store, bridge) {
               };
             }
             st.draft_hedge_config.class_ratios[ac] = hVal;
+            if (!st.hedge_configs.ASSET_CLASS) st.hedge_configs.ASSET_CLASS = { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} };
+            if (!st.hedge_configs.ASSET_CLASS.class_ratios) st.hedge_configs.ASSET_CLASS.class_ratios = {};
+            st.hedge_configs.ASSET_CLASS.class_ratios[ac] = hVal;
             bridge.sendDebounced('portfolio.evaluate', {
               portfolio_id: st.active_portfolio_id,
               weights: st.draft_weights,

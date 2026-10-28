@@ -322,3 +322,76 @@ test_that("Dynamic hedge currency detection in CMAs works across base currencies
   expect_true(all(c("CHF", "EUR", "GBP") %in% sc_usd$available_hedge_currencies))
   expect_false("USD" %in% sc_usd$available_hedge_currencies)
 })
+
+test_that("Portfolio save stores and restores hedge quotes across both ASSET_CLASS and CURRENCY_OVERLAY modes", {
+  st <- create_session_state(TEST_CONFIG)
+  load_dataset_into_state(st, TEST_DATA_PATH)
+
+  # 1. Save custom portfolio in ASSET_CLASS mode with class ratios and asset override
+  w_custom1 <- list("MSSWITL(RI)" = 0.5, "BMUS10Y(RI)" = 0.5)
+  hc_custom1 <- list(
+    mode = "ASSET_CLASS",
+    class_ratios = list(EQUITY = 0.5, BOND = 0.8, CASH = 0.0),
+    asset_overrides = list("BMUS10Y(RI)" = 0.9),
+    currency_ratios = list(EUR = 0.3, USD = 0.7),
+    configs = list(
+      ASSET_CLASS = list(mode = "ASSET_CLASS", class_ratios = list(EQUITY = 0.5, BOND = 0.8, CASH = 0.0), asset_overrides = list("BMUS10Y(RI)" = 0.9)),
+      CURRENCY_OVERLAY = list(mode = "CURRENCY_OVERLAY", currency_ratios = list(EUR = 0.3, USD = 0.7))
+    )
+  )
+
+  resp_save1 <- handle_app_command(list(
+    protocol_version = 1L, request_id = "save_ac", type = "portfolio.save",
+    payload = list(portfolio_id = "port_class_hedged", name = "Klassen Hedge Portfolio", weights = w_custom1, hedge_config = hc_custom1)
+  ), st)
+  expect_equal(resp_save1$status, "ok")
+
+  p1 <- st$portfolios[["port_class_hedged"]]
+  expect_equal(p1$hedge_config$mode, "ASSET_CLASS")
+  expect_equal(p1$hedge_config$class_ratios$BOND, 0.8)
+  expect_equal(p1$hedge_config$asset_overrides[["BMUS10Y(RI)"]], 0.9)
+  expect_equal(p1$hedge_config$configs$CURRENCY_OVERLAY$currency_ratios$USD, 0.7)
+
+  # Check that evaluation applied the 0.9 hedge on BMUS10Y(RI)
+  ev1 <- resp_save1$result$portfolio_evaluation
+  row_bmus <- Filter(function(x) x$asset_id == "BMUS10Y(RI)", ev1$exposures$asset_table)[[1]]
+  expect_equal(row_bmus$applied_h, 0.9)
+
+  # 2. Save custom portfolio in CURRENCY_OVERLAY mode
+  w_custom2 <- list("MSUSAM$(RI)" = 0.5, "MSEMUIL(RI)" = 0.3, "CASH_CHF_TR" = 0.2)
+  hc_custom2 <- list(
+    mode = "CURRENCY_OVERLAY",
+    currency_ratios = list(USD = 1.0, EUR = 0.0, GBP = 0.5),
+    configs = list(
+      ASSET_CLASS = list(mode = "ASSET_CLASS", class_ratios = list(EQUITY = 0.0, BOND = 1.0)),
+      CURRENCY_OVERLAY = list(mode = "CURRENCY_OVERLAY", currency_ratios = list(USD = 1.0, EUR = 0.0, GBP = 0.5))
+    )
+  )
+
+  resp_save2 <- handle_app_command(list(
+    protocol_version = 1L, request_id = "save_ov", type = "portfolio.save",
+    payload = list(portfolio_id = "port_overlay_hedged", name = "Overlay Hedge Portfolio", weights = w_custom2, hedge_config = hc_custom2)
+  ), st)
+  expect_equal(resp_save2$status, "ok")
+
+  p2 <- st$portfolios[["port_overlay_hedged"]]
+  expect_equal(p2$hedge_config$mode, "CURRENCY_OVERLAY")
+  expect_equal(p2$hedge_config$currency_ratios$USD, 1.0)
+  expect_equal(p2$hedge_config$currency_ratios$EUR, 0.0)
+
+  # 3. Switch back to port_class_hedged without specifying hedge_config in payload
+  resp_eval1 <- handle_app_command(list(
+    protocol_version = 1L, request_id = "eval_ac", type = "portfolio.evaluate",
+    payload = list(portfolio_id = "port_class_hedged")
+  ), st)
+  expect_equal(resp_eval1$status, "ok")
+  expect_equal(st$hedge_mode, "ASSET_CLASS")
+  expect_equal(st$hedge_configs$ASSET_CLASS$class_ratios$BOND, 0.8)
+  expect_equal(st$hedge_configs$ASSET_CLASS$asset_overrides[["BMUS10Y(RI)"]], 0.9)
+
+  # 4. Multi-SAA comparison includes each portfolio with its OWN hedge settings
+  comp <- resp_eval1$result$comparison
+  expect_true(!is.null(comp$summary_table))
+  p_ids <- vapply(comp$summary_table, function(x) x$portfolio_id, character(1))
+  expect_true(all(c("port_class_hedged", "port_overlay_hedged") %in% p_ids))
+})

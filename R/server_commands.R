@@ -206,17 +206,36 @@ normalize_incoming_hedge_config <- function(raw_hc, state) {
   }
   raw_hc <- as.list(raw_hc)
   mode <- toupper(raw_hc$mode %||% state$hedge_mode %||% "ASSET_CLASS")
+  configs_container <- if (!is.null(raw_hc$configs)) as.list(raw_hc$configs) else NULL
+
   if (identical(mode, "ASSET_CLASS")) {
-    list(
+    out <- list(
       mode = "ASSET_CLASS",
       class_ratios = as.list(raw_hc$class_ratios %||% state$hedge_configs$ASSET_CLASS$class_ratios %||% list()),
       asset_overrides = as.list(raw_hc$asset_overrides %||% list())
     )
+    if (!is.null(raw_hc$currency_ratios)) {
+      out$currency_ratios <- as.list(raw_hc$currency_ratios)
+    }
+    if (!is.null(configs_container)) {
+      out$configs <- configs_container
+    }
+    out
   } else {
-    list(
+    out <- list(
       mode = "CURRENCY_OVERLAY",
       currency_ratios = as.list(raw_hc$currency_ratios %||% state$hedge_configs$CURRENCY_OVERLAY$currency_ratios %||% list())
     )
+    if (!is.null(raw_hc$class_ratios)) {
+      out$class_ratios <- as.list(raw_hc$class_ratios)
+    }
+    if (!is.null(raw_hc$asset_overrides)) {
+      out$asset_overrides <- as.list(raw_hc$asset_overrides)
+    }
+    if (!is.null(configs_container)) {
+      out$configs <- configs_container
+    }
+    out
   }
 }
 
@@ -275,11 +294,29 @@ run_full_evaluation_pipeline <- function(state,
     state$portfolios[[portfolio_id]]$weights <- as.list(w_vec)
   }
 
-  hc <- normalize_incoming_hedge_config(hedge_config, state)
+  target_hc <- if (!is.null(hedge_config)) {
+    hedge_config
+  } else if (!is.null(state$portfolios[[portfolio_id]]$hedge_config)) {
+    state$portfolios[[portfolio_id]]$hedge_config
+  } else {
+    state$hedge_configs[[state$hedge_mode]]
+  }
+
+  hc <- normalize_incoming_hedge_config(target_hc, state)
   state$hedge_mode <- hc$mode
   state$hedge_configs[[hc$mode]] <- hc
   if (identical(hc$mode, "ASSET_CLASS")) {
     state$saved_asset_class_config <- hc
+  }
+  if (!is.null(hc$configs)) {
+    cfg_list <- as.list(hc$configs)
+    if (!is.null(cfg_list$ASSET_CLASS)) {
+      state$hedge_configs$ASSET_CLASS <- as.list(cfg_list$ASSET_CLASS)
+      state$saved_asset_class_config <- as.list(cfg_list$ASSET_CLASS)
+    }
+    if (!is.null(cfg_list$CURRENCY_OVERLAY)) {
+      state$hedge_configs$CURRENCY_OVERLAY <- as.list(cfg_list$CURRENCY_OVERLAY)
+    }
   }
 
   port_name <- state$portfolios[[portfolio_id]]$name %||% portfolio_id
@@ -370,11 +407,18 @@ run_full_evaluation_pipeline <- function(state,
     } else {
       normalize_incoming_weights(p_obj$weights, p_obj$weights, asset_ids)
     }
+    hc_p <- if (identical(pid, portfolio_id)) {
+      hc
+    } else if (!is.null(p_obj$hedge_config)) {
+      normalize_incoming_hedge_config(p_obj$hedge_config, state)
+    } else {
+      hc
+    }
     list(
       id = pid,
       name = p_obj$name %||% pid,
       weights = w_p,
-      hedge_config = hc,
+      hedge_config = hc_p,
       cost_bps_pa = state$cost_bps_pa
     )
   })
@@ -672,10 +716,26 @@ handle_app_command <- function(request, state) {
       port_name <- state$portfolios[[port_id]]$name %||% port_id
     }
 
+    raw_hc <- payload$hedge_config %||% state$hedge_configs[[state$hedge_mode]]
+    hc_norm <- normalize_incoming_hedge_config(raw_hc, state)
+
+    # Package comprehensive hedge configuration preserving active mode, ratios, and both mode configs
+    p_hc <- list(
+      mode = hc_norm$mode,
+      class_ratios = hc_norm$class_ratios %||% state$hedge_configs$ASSET_CLASS$class_ratios %||% list(),
+      asset_overrides = hc_norm$asset_overrides %||% state$hedge_configs$ASSET_CLASS$asset_overrides %||% list(),
+      currency_ratios = hc_norm$currency_ratios %||% state$hedge_configs$CURRENCY_OVERLAY$currency_ratios %||% list(),
+      configs = if (!is.null(raw_hc$configs)) as.list(raw_hc$configs) else list(
+        ASSET_CLASS = state$hedge_configs$ASSET_CLASS,
+        CURRENCY_OVERLAY = state$hedge_configs$CURRENCY_OVERLAY
+      )
+    )
+
     state$portfolios[[port_id]] <- list(
       id = port_id,
       name = port_name,
       weights = as.list(w_vec),
+      hedge_config = p_hc,
       is_custom = !(port_id %in% c("saa_25", "saa_50", "saa_75"))
     )
     state$active_portfolio_id <- port_id
@@ -687,7 +747,7 @@ handle_app_command <- function(request, state) {
       model_id = state$active_model_id,
       portfolio_id = port_id,
       weights = as.list(w_vec),
-      hedge_config = payload$hedge_config %||% state$hedge_configs[[state$hedge_mode]],
+      hedge_config = p_hc,
       scenario_id = state$active_scenario_id,
       rebalancing_rule = state$rebalancing_rule,
       cost_bps_pa = state$cost_bps_pa,
