@@ -27,6 +27,7 @@ build_risk_basis <- function(u,
   } else {
     asset_ids <- intersect(as.character(universe), meta_dt[Series_Type == "ASSET_TR", Code])
   }
+  asset_ids <- order_asset_universe(asset_ids, meta_dt, base_ccy = base_ccy)
 
   if (length(asset_ids) == 0L) {
     issues[[1L]] <- make_issue(

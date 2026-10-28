@@ -298,8 +298,8 @@ attach_cash_tr_to_registry <- function(reg, cash_tr) {
     }
   }
   reg$meta <- data.table::rbindlist(list(reg$meta, meta_combined), fill = TRUE)
-  reg$active_assets <- unique(c(reg$active_assets, cash_tr$active_codes))
-  reg$all_assets <- unique(c(reg$all_assets, cash_tr$all_codes))
+  reg$active_assets <- order_asset_universe(unique(c(cash_tr$active_codes, reg$active_assets)), reg$meta)
+  reg$all_assets <- order_asset_universe(unique(c(cash_tr$all_codes, reg$all_assets)), reg$meta)
   reg$coverage <- data.table::rbindlist(list(reg$coverage, new_cov), fill = TRUE)
 
   reg

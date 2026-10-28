@@ -639,3 +639,29 @@ build_series_registry <- function(data, meta, policy = NULL, file_hash = NULL, s
   class(registry) <- c("maps_dataset", "list")
   registry
 }
+
+order_asset_universe <- function(codes, meta, base_ccy = "CHF") {
+  if (is.null(codes) || length(codes) == 0L) return(character(0))
+  meta_dt <- data.table::as.data.table(meta)
+
+  valid_codes <- intersect(as.character(codes), meta_dt$Code)
+  if (length(valid_codes) == 0L) return(as.character(codes))
+
+  # 1. CASH assets: Domestic base_ccy cash first, then remaining cash rows in metadata order
+  cash_rows <- meta_dt[Code %in% valid_codes & Asset_Class == "CASH"]
+  cash_codes <- if (nrow(cash_rows) > 0L) {
+    if ("Return_Currency" %in% names(cash_rows)) {
+      dom_cash <- cash_rows[Return_Currency == base_ccy, Code]
+      other_cash <- cash_rows[Return_Currency != base_ccy, Code]
+      c(dom_cash, other_cash)
+    } else {
+      cash_rows$Code
+    }
+  } else character(0)
+
+  # 2. Non-CASH assets: Preserve exact order of appearance in original Excel metadata
+  non_cash_codes <- meta_dt[Code %in% valid_codes & (Asset_Class != "CASH" | is.na(Asset_Class)), Code]
+
+  c(cash_codes, non_cash_codes)
+}
+

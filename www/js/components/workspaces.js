@@ -174,7 +174,12 @@ export function renderPortfolioTriggers(store, bridge) {
   const tfoot = document.getElementById('portfolio_weights_tfoot');
   if (!tbody || !ev || !ev.exposures || !Array.isArray(ev.exposures.asset_table)) return;
 
-  const assetRows = ev.exposures.asset_table;
+  const rawAssetRows = ev.exposures.asset_table;
+  // Ensure active CASH rows are always at the very top, followed by remaining assets in Excel order
+  const assetRows = [
+    ...rawAssetRows.filter(r => r.asset_class === 'CASH'),
+    ...rawAssetRows.filter(r => r.asset_class !== 'CASH')
+  ];
   const rcMap = {};
   if (Array.isArray(ev.asset_contributions)) {
     for (const r of ev.asset_contributions) {
@@ -735,7 +740,12 @@ export function renderScenariosWorkspace(store, bridge) {
 
   const tbody = document.getElementById('scenario_assets_tbody');
   if (tbody && Array.isArray(scEval.asset_table)) {
-    const rows = scEval.asset_table.map(row => {
+    const rawScenRows = scEval.asset_table;
+    const sortedScenRows = [
+      ...rawScenRows.filter(r => r.asset_class === 'CASH'),
+      ...rawScenRows.filter(r => r.asset_class !== 'CASH')
+    ];
+    const rows = sortedScenRows.map(row => {
       const aid = row.asset_id;
       const locPct = Number((Number(row.cagr_local_5y || 0) * 100).toFixed(2));
 

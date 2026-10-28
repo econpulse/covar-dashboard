@@ -112,7 +112,7 @@ load_dataset_into_state <- function(state, workbook_path, is_private = FALSE) {
   state$spots <- bundle$spots
   state$forwards <- bundle$forwards
   state$cash <- bundle$cash
-  state$universe <- bundle$registry$active_assets
+  state$universe <- order_asset_universe(bundle$registry$active_assets, bundle$registry$meta, base_ccy = state$base_currency)
   state$state_version <- state$state_version + 1L
 
   list(

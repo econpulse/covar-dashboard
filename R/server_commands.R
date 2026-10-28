@@ -237,6 +237,9 @@ run_full_evaluation_pipeline <- function(state,
     state$carry_overrides <- list()
   }
   state$base_currency <- base_ccy
+  if (!is.null(state$universe) && !is.null(state$dataset$meta)) {
+    state$universe <- order_asset_universe(state$universe, state$dataset$meta, base_ccy = base_ccy)
+  }
   state$return_mode <- return_mode
   state$active_model_id <- model_id
   state$active_portfolio_id <- portfolio_id
@@ -751,7 +754,7 @@ handle_app_command <- function(request, state) {
     }
 
     new_univ <- state$dataset$meta[Active == TRUE & Series_Type == "ASSET_TR", Code]
-    state$universe <- sort(as.character(new_univ))
+    state$universe <- order_asset_universe(new_univ, state$dataset$meta, base_ccy = state$base_currency)
     state$dataset$active_assets <- state$universe
 
     cur_weights <- state$portfolios[[state$active_portfolio_id]]$weights

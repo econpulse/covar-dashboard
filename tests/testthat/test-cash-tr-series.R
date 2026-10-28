@@ -172,3 +172,50 @@ test_that("Session state integration loads cash TR series into active assets fro
   expect_equal(row_chf$arith_mean_local_pa, 0.0094) # mean of c(0.008, 0.009, 0.010, 0.010, 0.010)
   expect_equal(row_chf$cagr_local_5y, ((1.008 * 1.009 * 1.010^3)^(1/5)) - 1, tolerance = 1e-6)
 })
+
+test_that("Tab 1 asset order places active cash series first and preserves Excel metadata order for all other assets", {
+  skip_if_not(file.exists(TEST_DATA_PATH), "Data.xlsx not found")
+
+  st <- create_session_state(TEST_CONFIG)
+  ld <- load_dataset_into_state(st, TEST_DATA_PATH, is_private = FALSE)
+  expect_true(ld$valid)
+
+  # Bootstrap portfolio evaluation
+  req_boot <- list(
+    protocol_version = 1L,
+    request_id = "req_boot_order",
+    type = "app.bootstrap",
+    context = list(base_currency = "CHF"),
+    payload = list(base_currency = "CHF", model_id = "shrinkage_long", portfolio_id = "saa_50")
+  )
+  resp <- handle_app_command(req_boot, st)
+  expect_equal(resp$status, "ok")
+
+  ev <- resp$result$portfolio_evaluation
+  asset_ids <- vapply(ev$exposures$asset_table, function(x) x$asset_id, character(1))
+
+  # 1. First 4 assets must be the active CASH series, with domestic CHF cash first
+  expect_equal(asset_ids[1], "CASH_CHF_TR")
+  expect_true(all(grepl("^CASH_", asset_ids[1:4])))
+
+  # 2. Remaining assets must strictly match the original Excel metadata row order
+  excel_non_cash <- st$dataset$meta[Series_Type == "ASSET_TR" & Active == TRUE & Asset_Class != "CASH", Code]
+  expect_equal(asset_ids[5:length(asset_ids)], excel_non_cash)
+
+  # 3. When activating SWISSMI(RI), it must be placed directly in its original Excel position after MSSWITL(RI)
+  req_tog <- list(
+    protocol_version = 1L,
+    request_id = "req_tog_swissmi",
+    type = "universe.toggle_asset",
+    context = list(base_currency = "CHF"),
+    payload = list(asset_id = "SWISSMI(RI)")
+  )
+  resp_tog <- handle_app_command(req_tog, st)
+  expect_equal(resp_tog$status, "ok")
+
+  asset_ids_tog <- vapply(resp_tog$result$portfolio_evaluation$exposures$asset_table, function(x) x$asset_id, character(1))
+  expect_equal(asset_ids_tog[1], "CASH_CHF_TR")
+  expect_equal(asset_ids_tog[5], "MSSWITL(RI)")
+  expect_equal(asset_ids_tog[6], "SWISSMI(RI)")
+  expect_equal(asset_ids_tog[7], "MSEMUIL(RI)")
+})
