@@ -635,8 +635,39 @@ export function renderScenariosWorkspace(store, bridge) {
   setTxt('scen_kpi_cagr_hedged', fmtPct(scEval.metrics?.scenario_cagr_hedged_5y, 2));
   setTxt('scen_kpi_cagr_unhedged', fmtPct(scEval.metrics?.scenario_cagr_unhedged_5y, 2));
   setTxt('scen_kpi_cagr_local', fmtPct(scEval.metrics?.scenario_cagr_local_5y, 2));
-  setTxt('scen_kpi_hedge_effect', fmtPct(scEval.metrics?.scenario_hedge_effect_pa, 2));
+  setTxt('scen_hedge_effect_pa', fmtPct(scEval.metrics?.scenario_hedge_effect_pa, 2));
   setTxt('scen_uncertainty_note', scEval.uncertainty_description || '');
+
+  // Synchronize CMA Sets dropdown and delete button
+  const selCmaSet = document.getElementById('select_active_cma_set');
+  const btnDeleteCmaSet = document.getElementById('btn_delete_cma_set');
+  if (selCmaSet) {
+    const activeCmaId = st.active_cma_set_id || 'cma_base';
+    const standardCmaSets = [
+      { id: 'cma_base', name: 'Basisszenario (5J CMA - Hausmeinung)' },
+      { id: 'cma_stagflation', name: 'Stagflation / Zinsdruck (5J)' },
+      { id: 'cma_disinflation', name: 'Produktivitäts-/Disinflationsboom (5J)' }
+    ];
+
+    const customCmaList = Object.values(st.custom_cma_sets || {});
+    const cmaOptions = [
+      ...standardCmaSets.map(s => el('option', { value: s.id, selected: s.id === activeCmaId, textContent: s.name }))
+    ];
+
+    if (customCmaList.length > 0) {
+      cmaOptions.push(el('optgroup', { label: 'Eigene CMA-Sets' }, customCmaList.map(cs =>
+        el('option', { value: cs.id, selected: cs.id === activeCmaId, textContent: cs.name || cs.id })
+      )));
+    }
+
+    clearAndAppend(selCmaSet, cmaOptions);
+    selCmaSet.value = activeCmaId;
+
+    if (btnDeleteCmaSet) {
+      const isCustom = !['cma_base', 'cma_stagflation', 'cma_disinflation'].includes(activeCmaId);
+      btnDeleteCmaSet.style.display = isCustom ? 'inline-block' : 'none';
+    }
+  }
 
   // 5Y Forward-Carry overrides controls (dynamically detected for base currency)
   const carryControls = document.getElementById('cma_carry_controls');
@@ -795,50 +826,219 @@ export function renderScenariosWorkspace(store, bridge) {
 // ----------------------------------------------------------------------------
 // 5. Multi-SAA & Multi-Model Comparison Workspace
 // ----------------------------------------------------------------------------
-export function renderComparisonWorkspace(store) {
+function getPairwiseTe(idA, idB, pairwiseTeObj) {
+  if (!pairwiseTeObj || !idA || !idB) return 0;
+  if (idA === idB) return 0;
+  const pIds = pairwiseTeObj.portfolio_ids || [];
+  const matrix = pairwiseTeObj.matrix || pairwiseTeObj.rows || [];
+  const idxA = pIds.indexOf(idA);
+  const idxB = pIds.indexOf(idB);
+  if (idxA >= 0 && idxB >= 0 && matrix[idxA]) {
+    const row = matrix[idxA];
+    if (Array.isArray(row)) {
+      return Number(row[idxB]) || 0;
+    } else if (typeof row === 'object' && row !== null) {
+      return Number(row[idB] ?? row[pIds[idxB]] ?? Object.values(row)[idxB]) || 0;
+    }
+  }
+  return 0;
+}
+
+export function renderComparisonWorkspace(store, bridge, charts) {
   const st = store.state;
   const comp = st.results.comparison;
   if (!comp) return;
 
+  if (typeof store.initComparisonSlotsIfNeeded === 'function') {
+    store.initComparisonSlotsIfNeeded();
+  }
+
+  let slots = [...(st.comparison_slots || ['', '', '', '', '', ''])];
+  while (slots.length < 6) slots.push('');
+
   const sumTbody = document.getElementById('comparison_summary_tbody');
-  if (sumTbody && Array.isArray(comp.summary_table)) {
-    const rows = comp.summary_table.map(r =>
-      el('tr', {}, [
-        el('td', { className: 'sticky-col', style: { fontWeight: '600' }, textContent: r.portfolio_name }),
-        el('td', { className: 'num', style: { fontFamily: 'var(--font-mono)' }, textContent: r.config_hash }),
-        el('td', { className: 'num', textContent: fmtPct(r.equity_share, 1) }),
-        el('td', { className: 'num', textContent: fmtPct(r.foreign_before, 1) }),
-        el('td', { className: 'num', textContent: fmtPct(r.hedge_notional, 1) }),
-        el('td', { className: 'num', textContent: fmtPct(r.foreign_after, 1) }),
-        el('td', { className: 'num', textContent: fmtPct(r.vol_unhedged_ann, 2) }),
-        el('td', { className: 'num', style: { fontWeight: '700' }, textContent: fmtPct(r.vol_hedged_ann, 2) }),
-        el('td', { className: 'num', textContent: fmtPct(r.hedge_vol_effect_ann, 2) }),
-        el('td', { className: 'num', textContent: fmtNum(r.diversification_ratio, 2) }),
-        el('td', { className: 'num', style: { fontWeight: '600' }, textContent: fmtPct(r.tracking_error_vs_bench_ann, 2) })
-      ])
-    );
+  const summaryTable = Array.isArray(comp.summary_table) ? comp.summary_table : [];
+
+  // Group available portfolios: Standard vs Eigene Portfolios
+  const standardOpts = [];
+  const customOpts = [];
+
+  for (const r of summaryTable) {
+    const pid = r.portfolio_id;
+    const pname = r.portfolio_name || pid;
+    const baseId = pid.replace(/_unhedged$/, '');
+    const isCustom = Boolean((st.custom_portfolios && st.custom_portfolios[baseId]) || (!baseId.startsWith('saa_')));
+    const optObj = { id: pid, name: pname };
+    if (isCustom) {
+      customOpts.push(optObj);
+    } else {
+      standardOpts.push(optObj);
+    }
+  }
+
+  // Identify active benchmark portfolio (first non-empty slot)
+  const benchmarkId = slots.find(id => id && id.trim() !== '') || null;
+
+  // 1. Render exactly 6 Comparison Rows in the Summary Table
+  if (sumTbody) {
+    const rows = [];
+    for (let slotIdx = 0; slotIdx < 6; slotIdx++) {
+      const currentSelected = slots[slotIdx] || '';
+
+      // Build options for select: empty option first
+      const selectChildren = [
+        el('option', { value: '', textContent: '-- Kein Portfolio (Leer) --' })
+      ];
+
+      const renderOpt = (opt) => {
+        const isSelected = opt.id === currentSelected;
+        const isAlreadySelectedElsewhere = opt.id !== '' && !isSelected && slots.includes(opt.id);
+        const optAttrs = {
+          value: opt.id,
+          textContent: opt.name
+        };
+        if (isSelected) optAttrs.selected = true;
+        if (isAlreadySelectedElsewhere) optAttrs.disabled = true;
+        return el('option', optAttrs);
+      };
+
+      if (standardOpts.length > 0) {
+        selectChildren.push(el('optgroup', { label: 'Standard-Portfolios' }, standardOpts.map(renderOpt)));
+      }
+      if (customOpts.length > 0) {
+        selectChildren.push(el('optgroup', { label: 'Eigene Portfolios (Custom)' }, customOpts.map(renderOpt)));
+      }
+
+      const selectEl = el('select', {
+        className: 'form-select form-select-sm',
+        style: {
+          minWidth: '220px',
+          maxWidth: '320px',
+          fontWeight: '600',
+          cursor: 'pointer'
+        }
+      }, selectChildren);
+
+      selectEl.addEventListener('change', (e) => {
+        const newId = e.target.value;
+        store.setComparisonSlot(slotIdx, newId);
+        renderComparisonWorkspace(store, bridge, charts);
+      });
+
+      const matchedRec = currentSelected ? summaryTable.find(x => x.portfolio_id === currentSelected) : null;
+
+      if (matchedRec) {
+        let teDisplay = '-';
+        if (benchmarkId) {
+          if (matchedRec.portfolio_id === benchmarkId) {
+            teDisplay = '0.00 % (Ref.)';
+          } else {
+            const teVal = getPairwiseTe(matchedRec.portfolio_id, benchmarkId, comp.pairwise_tracking_error);
+            teDisplay = fmtPct(teVal, 2);
+          }
+        }
+
+        rows.push(
+          el('tr', {}, [
+            el('td', { className: 'sticky-col' }, selectEl),
+            el('td', { className: 'num', style: { fontFamily: 'var(--font-mono)' }, textContent: matchedRec.config_hash || '-' }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.equity_share, 1) }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.foreign_before, 1) }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.hedge_notional, 1) }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.foreign_after, 1) }),
+            el('td', { className: 'num', style: { fontWeight: '700', color: 'var(--color-primary, #1a73e8)' }, textContent: fmtPct(matchedRec.cma_return_hedged_ann, 2) }),
+            el('td', { className: 'num', style: { fontWeight: '700' }, textContent: fmtPct(matchedRec.vol_hedged_ann, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.vol_unhedged_ann, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(matchedRec.hedge_vol_effect_ann, 2) }),
+            el('td', { className: 'num', style: { fontWeight: '600' }, textContent: fmtNum(matchedRec.cma_sharpe_ratio, 2) }),
+            el('td', { className: 'num', textContent: fmtNum(matchedRec.diversification_ratio, 2) }),
+            el('td', { className: 'num', style: { fontWeight: '600' }, textContent: teDisplay })
+          ])
+        );
+      } else {
+        // Empty / Blank Row
+        rows.push(
+          el('tr', { style: { opacity: '0.6' } }, [
+            el('td', { className: 'sticky-col' }, selectEl),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' }),
+            el('td', { className: 'num muted', textContent: '-' })
+          ])
+        );
+      }
+    }
     clearAndAppend(sumTbody, rows);
   }
 
-  // Pairwise Tracking Error Matrix
+  // 2. Render Pairwise Tracking Error Matrix for Active Selected Portfolios
   const teThead = document.getElementById('comparison_te_thead');
   const teTbody = document.getElementById('comparison_te_tbody');
-  if (teThead && teTbody && comp.pairwise_tracking_error) {
-    const pIds = comp.pairwise_tracking_error.portfolio_ids || [];
-    const pRows = comp.pairwise_tracking_error.rows || [];
+  const activeSelected = slots.filter(id => id && id.trim() !== '');
 
-    clearAndAppend(teThead, el('tr', {}, [
-      el('th', { className: 'sticky-col', textContent: 'Tracking Error p.a.' }),
-      ...pIds.map(id => el('th', { className: 'num', textContent: id }))
-    ]));
+  if (teThead && teTbody) {
+    if (activeSelected.length === 0) {
+      clearAndAppend(teThead, el('tr', {}, [
+        el('th', { className: 'sticky-col', textContent: 'Tracking Error p.a.' }),
+        el('th', { className: 'num', textContent: '-' })
+      ]));
+      clearAndAppend(teTbody, [
+        el('tr', {}, [
+          el('td', {
+            colSpan: 2,
+            style: { textAlign: 'center', padding: '16px', color: 'var(--text-muted)' },
+            textContent: 'Kein Portfolio ausgewählt. Bitte oben Portfolios für den Vergleich auswählen.'
+          })
+        ])
+      ]);
+    } else {
+      const getShortName = (pid) => {
+        const item = summaryTable.find(x => x.portfolio_id === pid);
+        return item ? (item.portfolio_name || item.portfolio_id) : pid;
+      };
 
-    const body = pIds.map((pid, i) =>
-      el('tr', {}, [
-        el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: pid }),
-        ...(pRows[i] || []).map(v => el('td', { className: 'num', textContent: fmtPct(v, 2) }))
-      ])
-    );
-    clearAndAppend(teTbody, body);
+      clearAndAppend(teThead, el('tr', {}, [
+        el('th', { className: 'sticky-col', textContent: 'Tracking Error p.a.' }),
+        ...activeSelected.map(id => el('th', {
+          className: 'num',
+          title: getShortName(id),
+          style: { maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          textContent: getShortName(id)
+        }))
+      ]));
+
+      const bodyRows = activeSelected.map((rowId) =>
+        el('tr', {}, [
+          el('td', {
+            className: 'sticky-col',
+            title: getShortName(rowId),
+            style: { fontWeight: '600', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            textContent: getShortName(rowId)
+          }),
+          ...activeSelected.map(colId => {
+            if (rowId === colId) {
+              return el('td', { className: 'num muted', textContent: '0.00 %' });
+            }
+            const teVal = getPairwiseTe(rowId, colId, comp.pairwise_tracking_error);
+            return el('td', { className: 'num', textContent: fmtPct(teVal, 2) });
+          })
+        ])
+      );
+      clearAndAppend(teTbody, bodyRows);
+    }
+  }
+
+  // 3. Render Bar Chart for Active Selected Portfolios
+  if (charts && comp.cross_model_comparison) {
+    charts.renderComparisonChart('chart_comparison_models', comp.cross_model_comparison, activeSelected);
   }
 }
 

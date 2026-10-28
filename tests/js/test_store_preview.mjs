@@ -167,4 +167,77 @@ assert.equal(store.state.results.portfolio_evaluation.config_hash, 'hash_eur_105
 assert.equal(store.state.diagnostics.warnings.length, 1);
 assert.equal(store.state.diagnostics.warnings[0].code, 'WEIGHT_SUM_NOT_ONE');
 
+// 5. Test Comparison Slots in Tab 5:
+// - Max 6 slots
+// - Disallow duplicate selection (selecting an ID clears it from another slot)
+// - Supports blank ("") slot
+// - Custom portfolio deletion clears slot
+store.applyServerEnvelope({
+  status: 'ok',
+  result: {
+    comparison: {
+      summary_table: [
+        { portfolio_id: 'saa_50', portfolio_name: 'SAA 50' },
+        { portfolio_id: 'saa_50_unhedged', portfolio_name: 'SAA 50 (Ungesichert 0%)' },
+        { portfolio_id: 'saa_25', portfolio_name: 'SAA 25' },
+        { portfolio_id: 'saa_25_unhedged', portfolio_name: 'SAA 25 (Ungesichert 0%)' },
+        { portfolio_id: 'saa_75', portfolio_name: 'SAA 75' },
+        { portfolio_id: 'custom_growth', portfolio_name: 'Growth SAA' },
+        { portfolio_id: 'custom_growth_unhedged', portfolio_name: 'Growth SAA (Ungesichert 0%)' }
+      ],
+      pairwise_tracking_error: {
+        portfolio_ids: ['saa_50', 'saa_50_unhedged', 'saa_25', 'saa_75'],
+        matrix: [[0, 0.01, 0.02, 0.03], [0.01, 0, 0.02, 0.03], [0.02, 0.02, 0, 0.04], [0.03, 0.03, 0.04, 0]]
+      }
+    }
+  }
+});
+
+assert.equal(Array.isArray(store.state.comparison_slots), true);
+assert.equal(store.state.comparison_slots.length, 6);
+assert.equal(store.state.comparison_slots[0], 'saa_50');
+assert.equal(store.state.comparison_slots[1], 'saa_50_unhedged');
+
+// Set slot 2 to custom_growth
+store.setComparisonSlot(2, 'custom_growth');
+assert.equal(store.state.comparison_slots[2], 'custom_growth');
+
+// Set slot 3 to custom_growth (duplicate test) -> slot 2 must be cleared to ''
+store.setComparisonSlot(3, 'custom_growth');
+assert.equal(store.state.comparison_slots[3], 'custom_growth');
+assert.equal(store.state.comparison_slots[2], '');
+
+// Blank slot test
+store.setComparisonSlot(4, '');
+assert.equal(store.state.comparison_slots[4], '');
+
+// Delete custom portfolio clears it from slots
+store.state.custom_portfolios = { custom_growth: { name: 'Growth SAA' } };
+store.deleteCustomPortfolio('custom_growth');
+assert.equal(store.state.comparison_slots[3], '');
+
+// 6. Test CMA Sets Management:
+// - Save custom CMA set
+// - Select CMA set
+// - Delete custom CMA set
+const savedSet = store.saveCustomCmaSet('cma_test_1', 'CMA Test Optimistic', { A1: 0.08, A2: 0.04 }, { CHF: -0.01 }, 'base_5y');
+assert.equal(savedSet.name, 'CMA Test Optimistic');
+assert.equal(store.state.active_cma_set_id, 'cma_test_1');
+assert.equal(store.state.custom_cma_sets['cma_test_1'].asset_returns['A1'], 0.08);
+
+// Mock bridge for selectCmaSet test
+const sentCmds = [];
+const mockBridge = {
+  sendCommand: (type, payload) => sentCmds.push({ type, payload })
+};
+
+store.selectCmaSet('cma_test_1', mockBridge);
+assert.equal(sentCmds.length, 1);
+assert.equal(sentCmds[0].type, 'scenarios.evaluate');
+assert.equal(sentCmds[0].payload.asset_return_overrides['A1'], 0.08);
+
+store.deleteCustomCmaSet('cma_test_1');
+assert.equal(store.state.custom_cma_sets['cma_test_1'], undefined);
+assert.equal(store.state.active_cma_set_id, 'cma_base');
+
 console.log('[PASS] All Frontend Store & Matrix Preview tests succeeded.');

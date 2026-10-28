@@ -389,9 +389,55 @@ test_that("Portfolio save stores and restores hedge quotes across both ASSET_CLA
   expect_equal(st$hedge_configs$ASSET_CLASS$class_ratios$BOND, 0.8)
   expect_equal(st$hedge_configs$ASSET_CLASS$asset_overrides[["BMUS10Y(RI)"]], 0.9)
 
-  # 4. Multi-SAA comparison includes each portfolio with its OWN hedge settings
+  # 4. Multi-SAA comparison includes each portfolio with its OWN hedge settings and unhedged variants
   comp <- resp_eval1$result$comparison
   expect_true(!is.null(comp$summary_table))
   p_ids <- vapply(comp$summary_table, function(x) x$portfolio_id, character(1))
   expect_true(all(c("port_class_hedged", "port_overlay_hedged") %in% p_ids))
+  expect_true(all(c("port_class_hedged_unhedged", "port_overlay_hedged_unhedged") %in% p_ids))
+  expect_true(!is.null(comp$pairwise_tracking_error$portfolio_ids))
+  expect_true(all(c("port_class_hedged", "port_class_hedged_unhedged") %in% comp$pairwise_tracking_error$portfolio_ids))
+  expect_equal(length(comp$pairwise_tracking_error$matrix), length(comp$pairwise_tracking_error$portfolio_ids))
+
+  # 5. Verify CMA return metrics in comparison summary table
+  expect_true("cma_return_hedged_ann" %in% names(comp$summary_table[[1L]]))
+  expect_true("cma_sharpe_ratio" %in% names(comp$summary_table[[1L]]))
+  expect_true(is.numeric(comp$summary_table[[1L]]$cma_return_hedged_ann))
+
+  # 6. Verify overriding asset return in scenarios.evaluate
+  resp_scen <- handle_app_command(list(
+    protocol_version = 1L, request_id = "scen_ovr", type = "scenarios.evaluate",
+    payload = list(
+      scenario_id = "base_5y",
+      asset_return_overrides = list(
+        "BMUS10Y(RI)" = 0.045
+      )
+    )
+  ), st)
+  expect_equal(resp_scen$status, "ok")
+  asset_tbl <- resp_scen$result$scenario_evaluation$asset_table
+  m_row <- asset_tbl[[which(vapply(asset_tbl, function(x) identical(x$asset_id, "BMUS10Y(RI)"), logical(1)))[1L]]]
+  expect_equal(round(as.numeric(m_row$cagr_local_5y), 3), 0.045)
+
+  # 7. Verify CMA set save and delete
+  resp_cma_save <- handle_app_command(list(
+    protocol_version = 1L, request_id = "cma_s", type = "cma.save",
+    payload = list(
+      set_id = "cma_custom_test",
+      name = "Custom Bullish CMA",
+      scenario_id = "base_5y",
+      asset_returns = list("MSSWITL(RI)" = 0.08),
+      carry_overrides = list("USD" = -0.01)
+    )
+  ), st)
+  expect_equal(resp_cma_save$status, "ok")
+  expect_true("cma_custom_test" %in% names(st$custom_cma_sets))
+  expect_equal(st$custom_cma_sets$cma_custom_test$name, "Custom Bullish CMA")
+
+  resp_cma_del <- handle_app_command(list(
+    protocol_version = 1L, request_id = "cma_d", type = "cma.delete",
+    payload = list(set_id = "cma_custom_test")
+  ), st)
+  expect_equal(resp_cma_del$status, "ok")
+  expect_false("cma_custom_test" %in% names(st$custom_cma_sets))
 })

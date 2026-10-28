@@ -4,9 +4,9 @@
 // Connects AppStore, ShinyBridge, EChartsManager, and Workspace Components
 // ============================================================================
 
-import { AppStore } from './store.js?v=20261028_04';
-import { ShinyBridge } from './shiny-bridge.js?v=20261028_04';
-import { EChartsManager } from './charts/echarts-manager.js?v=20261028_04';
+import { AppStore } from './store.js?v=20261028_07';
+import { ShinyBridge } from './shiny-bridge.js?v=20261028_07';
+import { EChartsManager } from './charts/echarts-manager.js?v=20261028_07';
 import {
   el,
   clearAndAppend,
@@ -19,7 +19,7 @@ import {
   renderDataWorkspace,
   updateAllPortfolioKpis,
   updateWeightFooter
-} from './components/workspaces.js?v=20261028_04';
+} from './components/workspaces.js?v=20261028_07';
 
 const store = new AppStore();
 const bridge = new ShinyBridge(store);
@@ -162,7 +162,8 @@ function renderActiveTabCharts() {
   } else if (tab === 'returns' && sc) {
     charts.renderScenarioPathChart('chart_scenario_paths', sc.yearly_path || [], st.base_currency);
   } else if (tab === 'comparison' && comp) {
-    charts.renderComparisonChart('chart_comparison_models', comp.cross_model_comparison || []);
+    const activeSelected = (st.comparison_slots || []).filter(id => id && id.trim() !== '');
+    charts.renderComparisonChart('chart_comparison_models', comp.cross_model_comparison || [], activeSelected);
   }
 }
 
@@ -184,7 +185,7 @@ function renderWorkspaceForTab(tabId) {
       renderScenariosWorkspace(store, bridge);
       break;
     case 'comparison':
-      renderComparisonWorkspace(store);
+      renderComparisonWorkspace(store, bridge, charts);
       break;
     case 'data':
       renderDataWorkspace(store, bridge);
@@ -588,6 +589,137 @@ function bindUIEvents() {
       store.state.ui_filters.risk_decomp_level = e.target.value;
       renderRiskWorkspace(store);
       renderActiveTabCharts();
+    });
+  }
+
+  // CMA Sets Management: Selector, Save, Save As New, Delete
+  const selCmaSet = document.getElementById('select_active_cma_set');
+  if (selCmaSet) {
+    selCmaSet.addEventListener('change', e => {
+      store.selectCmaSet(e.target.value, bridge);
+    });
+  }
+
+  const getCurrentCmaValues = () => {
+    const retMap = {};
+    const assetTable = store.state.results.scenario_evaluation?.asset_table || [];
+    for (const row of assetTable) {
+      if (row.asset_id) retMap[row.asset_id] = Number(row.cagr_local_5y || 0);
+    }
+    const carryMap = store.state.carry_overrides ? JSON.parse(JSON.stringify(store.state.carry_overrides)) : {};
+    return { retMap, carryMap };
+  };
+
+  const btnSaveCma = document.getElementById('btn_save_cma_set');
+  if (btnSaveCma) {
+    btnSaveCma.addEventListener('click', () => {
+      const curId = store.state.active_cma_set_id || 'cma_base';
+      const isBuiltin = ['cma_base', 'cma_stagflation', 'cma_disinflation'].includes(curId);
+      const curSet = store.state.custom_cma_sets?.[curId];
+      const curName = curSet?.name || (isBuiltin ? (curId === 'cma_base' ? 'Basisszenario (5J CMA - Hausmeinung)' : curId === 'cma_stagflation' ? 'Stagflation / Zinsdruck (5J)' : 'Produktivitäts-/Disinflationsboom (5J)') : curId);
+
+      if (isBuiltin) {
+        showModal({
+          title: 'Standard-CMA-Set überschreiben',
+          bodyHtml: `
+            <div style="padding: 8px 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; margin-bottom: 12px; color: #856404; font-size: var(--text-xs);">
+              <strong>Hinweis:</strong> Sie überschreiben die Standard-Werte für <em>"${curName}"</em> für die laufende Sitzung.
+            </div>
+            <p style="margin: 0 0 10px 0;">Möchten Sie die geänderten Rendite- und Carry-Werte für <strong>"${curName}"</strong> speichern?</p>
+          `,
+          confirmText: 'Überschreiben',
+          onConfirm: () => {
+            const { retMap, carryMap } = getCurrentCmaValues();
+            bridge.sendCommand('scenarios.evaluate', {
+              scenario_id: store.state.active_scenario_id,
+              rebalancing_rule: store.state.rebalancing_rule,
+              carry_overrides: carryMap,
+              asset_return_overrides: retMap
+            });
+          }
+        });
+      } else {
+        showModal({
+          title: 'CMA-Set speichern',
+          bodyHtml: `
+            <p style="margin: 0 0 10px 0;">Möchten Sie das benutzerdefinierte CMA-Set <strong>"${curName}"</strong> mit den aktuellen Rendite- und Carry-Werten überschreiben?</p>
+            <div style="font-size: var(--text-xs); color: var(--text-secondary);">
+              Bestehende Renditeerwartungen dieses Sets werden aktualisiert.
+            </div>
+          `,
+          confirmText: 'Speichern',
+          onConfirm: () => {
+            const { retMap, carryMap } = getCurrentCmaValues();
+            store.saveCustomCmaSet(curId, curName, retMap, carryMap, store.state.active_scenario_id);
+            bridge.sendCommand('cma.save', {
+              set_id: curId,
+              name: curName,
+              scenario_id: store.state.active_scenario_id,
+              asset_returns: retMap,
+              carry_overrides: carryMap
+            });
+          }
+        });
+      }
+    });
+  }
+
+  const btnNewCma = document.getElementById('btn_new_cma_set');
+  if (btnNewCma) {
+    btnNewCma.addEventListener('click', () => {
+      const defName = `Mein CMA-Set ${Object.keys(store.state.custom_cma_sets || {}).length + 1}`;
+      showModal({
+        title: 'Neues CMA-Set anlegen',
+        bodyHtml: `
+          <label for="modal_cma_name_input" style="display: block; font-weight: 600; margin-bottom: 6px;">Bezeichnung des CMA-Sets:</label>
+          <input type="text" id="modal_cma_name_input" class="form-control" style="width: 100%;" value="${defName}" maxlength="60" />
+          <div style="font-size: var(--text-xs); color: var(--text-secondary); margin-top: 8px;">
+            Speichert alle aktuellen lokalen 5J-Renditeerwartungen und Carry-Annahmen als neues eigenständiges Set.
+          </div>
+        `,
+        confirmText: 'Als Neu anlegen',
+        onConfirm: (container) => {
+          const inp = container.querySelector('#modal_cma_name_input');
+          const val = (inp?.value || '').trim();
+          if (!val) return false;
+          const newId = `cma_custom_${Date.now()}`;
+          const { retMap, carryMap } = getCurrentCmaValues();
+          store.saveCustomCmaSet(newId, val, retMap, carryMap, store.state.active_scenario_id);
+          bridge.sendCommand('cma.save', {
+            set_id: newId,
+            name: val,
+            scenario_id: store.state.active_scenario_id,
+            asset_returns: retMap,
+            carry_overrides: carryMap
+          });
+          renderWorkspaceForTab('returns');
+        }
+      });
+    });
+  }
+
+  const btnDeleteCma = document.getElementById('btn_delete_cma_set');
+  if (btnDeleteCma) {
+    btnDeleteCma.addEventListener('click', () => {
+      const curId = store.state.active_cma_set_id;
+      if (!curId || ['cma_base', 'cma_stagflation', 'cma_disinflation'].includes(curId)) return;
+      const curSet = store.state.custom_cma_sets?.[curId];
+      const name = curSet?.name || curId;
+      showModal({
+        title: 'CMA-Set löschen',
+        bodyHtml: `
+          <p style="margin: 0 0 10px 0;">Möchten Sie das CMA-Set <strong>"${name}"</strong> wirklich unwiderruflich löschen?</p>
+          <div style="font-size: var(--text-xs); color: var(--color-danger, #d9534f);">Diese Aktion kann nicht rückgängig gemacht werden.</div>
+        `,
+        confirmText: 'Löschen',
+        confirmClass: 'btn-danger',
+        onConfirm: () => {
+          store.deleteCustomCmaSet(curId);
+          bridge.sendCommand('cma.delete', { set_id: curId });
+          store.selectCmaSet('cma_base', bridge);
+          renderWorkspaceForTab('returns');
+        }
+      });
     });
   }
 

@@ -399,9 +399,21 @@ run_full_evaluation_pipeline <- function(state,
   scen_eval <- scen_res$value
   state$current_scenario_eval <- scen_eval
 
-  # Multi-SAA & multi-model comparison
-  saa_configs <- lapply(names(state$portfolios), function(pid) {
+  # Multi-SAA & multi-model comparison: include both configured/hedged and unhedged (0%) variant for every portfolio
+  unhedged_ratios <- list(CHF = 0, EUR = 0, USD = 0, GBP = 0, JPY = 0)
+  port_ids <- names(state$portfolios)
+  if (!portfolio_id %in% port_ids) {
+    port_ids <- c(portfolio_id, port_ids)
+  }
+
+  saa_configs <- list()
+  for (pid in port_ids) {
     p_obj <- state$portfolios[[pid]]
+    p_name <- if (identical(pid, portfolio_id)) {
+      port_name
+    } else {
+      p_obj$name %||% pid
+    }
     w_p <- if (identical(pid, portfolio_id)) {
       w_vec
     } else {
@@ -414,23 +426,25 @@ run_full_evaluation_pipeline <- function(state,
     } else {
       hc
     }
-    list(
+
+    # 1. Configured / Hedged variant
+    saa_configs[[length(saa_configs) + 1L]] <- list(
       id = pid,
-      name = p_obj$name %||% pid,
+      name = p_name,
       weights = w_p,
       hedge_config = hc_p,
       cost_bps_pa = state$cost_bps_pa
     )
-  })
 
-  # Also add an Unhedged variant of the active portfolio for direct hedge effect comparison
-  saa_configs[[length(saa_configs) + 1L]] <- list(
-    id = paste0(portfolio_id, "_unhedged"),
-    name = paste0(port_name, " (Ungesichert 0%)"),
-    weights = w_vec,
-    hedge_config = list(mode = "CURRENCY_OVERLAY", currency_ratios = list(CHF = 0, EUR = 0, USD = 0, GBP = 0, JPY = 0)),
-    cost_bps_pa = 0.0
-  )
+    # 2. Unhedged variant (0% FX hedge)
+    saa_configs[[length(saa_configs) + 1L]] <- list(
+      id = paste0(pid, "_unhedged"),
+      name = paste0(p_name, " (Ungesichert 0%)"),
+      weights = w_p,
+      hedge_config = list(mode = "CURRENCY_OVERLAY", currency_ratios = unhedged_ratios),
+      cost_bps_pa = 0.0
+    )
+  }
 
   extra_models <- NULL
   if (isTRUE(include_all_models_comparison)) {
@@ -446,7 +460,8 @@ run_full_evaluation_pipeline <- function(state,
     meta = state$dataset$meta,
     benchmark_index = which(vapply(saa_configs, function(x) identical(x$id, portfolio_id), logical(1)))[1L] %||% 1L,
     extra_models = extra_models,
-    cache = cache
+    cache = cache,
+    scenario_eval = scen_eval
   )
   state$current_comparison_eval <- comp_eval
   state$state_version <- state$state_version + 1L
@@ -518,11 +533,13 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
         delta_exposures = comp_eval$delta_exposures,
         pairwise_tracking_error = list(
           portfolio_ids = rownames(comp_eval$pairwise_tracking_error),
+          matrix = lapply(seq_len(nrow(comp_eval$pairwise_tracking_error)), function(i) as.numeric(comp_eval$pairwise_tracking_error[i, ])),
           rows = lapply(seq_len(nrow(comp_eval$pairwise_tracking_error)), function(i) as.numeric(comp_eval$pairwise_tracking_error[i, ]))
         ),
         cross_model_comparison = comp_eval$cross_model_comparison
       )
     } else NULL,
+    custom_cma_sets = state$custom_cma_sets,
     cache_stats = cache$get_stats()
   )
 
@@ -907,14 +924,26 @@ handle_app_command <- function(request, state) {
     if (!is.null(payload$asset_return_overrides)) {
       sc_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
       ovr <- as.list(payload$asset_return_overrides)
+      horizon <- state$expectations$horizon %||% 5L
+      if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions)) {
+        state$expectations$scenarios[[sc_id]]$asset_assumptions <- list()
+      }
       for (acode in names(ovr)) {
-        if (!is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
-          val_num <- as.numeric(ovr[[acode]])
-          if (length(val_num) == 1L && !is.na(val_num)) {
-            state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- rep(val_num, state$expectations$horizon)
-          } else if (length(val_num) == state$expectations$horizon) {
-            state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- val_num
-          }
+        val_num <- as.numeric(ovr[[acode]])
+        if (length(val_num) == 1L && !is.na(val_num)) {
+          r_vec <- rep(val_num, horizon)
+        } else if (length(val_num) == horizon) {
+          r_vec <- val_num
+        } else {
+          r_vec <- rep(0.0, horizon)
+        }
+        if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
+          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]] <- list(
+            asset_id = acode,
+            annual_local_returns = r_vec
+          )
+        } else {
+          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- r_vec
         }
       }
       state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
@@ -931,6 +960,89 @@ handle_app_command <- function(request, state) {
       scenario_id = scen_id,
       rebalancing_rule = rebal
     )
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "cma.save") || identical(cmd_type, "cma_set.save")) {
+    set_id <- as.character(payload$set_id %||% paste0("cma_custom_", format(Sys.time(), "%Y%m%d%H%M%S")))
+    set_name <- as.character(payload$name %||% set_id)
+    sc_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
+
+    # Store custom CMA set in session state
+    state$custom_cma_sets[[set_id]] <- list(
+      id = set_id,
+      name = set_name,
+      scenario_id = sc_id,
+      asset_returns = payload$asset_returns,
+      carry_overrides = payload$carry_overrides
+    )
+
+    # Apply asset return overrides if provided
+    if (!is.null(payload$asset_returns)) {
+      ovr <- as.list(payload$asset_returns)
+      horizon <- state$expectations$horizon %||% 5L
+      if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions)) {
+        state$expectations$scenarios[[sc_id]]$asset_assumptions <- list()
+      }
+      for (acode in names(ovr)) {
+        val_num <- as.numeric(ovr[[acode]])
+        if (length(val_num) == 1L && !is.na(val_num)) {
+          r_vec <- rep(val_num, horizon)
+        } else if (length(val_num) == horizon) {
+          r_vec <- val_num
+        } else {
+          r_vec <- rep(0.0, horizon)
+        }
+        if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
+          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]] <- list(
+            asset_id = acode,
+            annual_local_returns = r_vec
+          )
+        } else {
+          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- r_vec
+        }
+      }
+      state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
+    }
+
+    if (!is.null(payload$carry_overrides)) {
+      state$carry_overrides <- as.list(payload$carry_overrides)
+    }
+
+    rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      scenario_id = sc_id,
+      rebalancing_rule = rebal
+    )
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "cma.delete") || identical(cmd_type, "cma_set.delete")) {
+    set_id <- as.character(payload$set_id)
+    if (set_id %in% c("cma_base", "cma_stagflation", "cma_disinflation")) {
+      return(build_response_envelope(
+        request = request,
+        state = state,
+        status = "error",
+        result = NULL,
+        issues = list(make_issue("BUILTIN_CMA_SET_CANNOT_BE_DELETED", "ERROR", "Standard-CMA-Sets können nicht gelöscht werden."))
+      ))
+    }
+    state$custom_cma_sets[[set_id]] <- NULL
+    res <- run_full_evaluation_pipeline(state = state)
     return(build_response_envelope(
       request = request,
       state = state,

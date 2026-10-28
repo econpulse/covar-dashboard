@@ -22,6 +22,8 @@ export class AppStore {
       covariance_models: {},
       portfolios: {},
       custom_portfolios: {},
+      active_cma_set_id: 'cma_base',
+      custom_cma_sets: {},
       carry_overrides: {},
       hedge_mode: 'ASSET_CLASS',
       hedge_configs: {
@@ -30,6 +32,7 @@ export class AppStore {
       },
       draft_weights: {},
       draft_hedge_config: null,
+      comparison_slots: ['', '', '', '', '', ''],
       expectations: null,
       results: {
         portfolio_evaluation: null,
@@ -77,6 +80,17 @@ export class AppStore {
         if (parsed && typeof parsed === 'object') {
           this.state.custom_portfolios = parsed;
           this.state.portfolios = { ...(this.state.portfolios || {}), ...parsed };
+        }
+      }
+    } catch (e) {}
+
+    // Load custom CMA sets from localStorage if present
+    try {
+      const rawCma = localStorage.getItem('MAPS_CUSTOM_CMA_SETS');
+      if (rawCma) {
+        const parsedCma = JSON.parse(rawCma);
+        if (parsedCma && typeof parsedCma === 'object') {
+          this.state.custom_cma_sets = parsedCma;
         }
       }
     } catch (e) {}
@@ -143,6 +157,128 @@ export class AppStore {
         localStorage.setItem('MAPS_CUSTOM_PORTFOLIOS', JSON.stringify(this.state.custom_portfolios));
       } catch (e) {}
     }
+    if (Array.isArray(this.state.comparison_slots)) {
+      this.state.comparison_slots = this.state.comparison_slots.map(s => {
+        if (s === portId || s === `${portId}_unhedged`) return '';
+        return s;
+      });
+      try {
+        localStorage.setItem('lukb_comparison_slots', JSON.stringify(this.state.comparison_slots));
+      } catch (_) {}
+    }
+  }
+
+  saveCustomCmaSet(setId, name, assetReturns, carryOverrides, scenarioId = 'base_5y') {
+    if (!setId) setId = `cma_custom_${Date.now()}`;
+    if (!this.state.custom_cma_sets) this.state.custom_cma_sets = {};
+    const setObj = {
+      id: setId,
+      name: name || setId,
+      scenario_id: scenarioId,
+      asset_returns: assetReturns || {},
+      carry_overrides: carryOverrides || {}
+    };
+    this.state.custom_cma_sets[setId] = setObj;
+    this.state.active_cma_set_id = setId;
+    try {
+      localStorage.setItem('MAPS_CUSTOM_CMA_SETS', JSON.stringify(this.state.custom_cma_sets));
+    } catch (_) {}
+    return setObj;
+  }
+
+  deleteCustomCmaSet(setId) {
+    if (this.state.custom_cma_sets && this.state.custom_cma_sets[setId]) {
+      delete this.state.custom_cma_sets[setId];
+      try {
+        localStorage.setItem('MAPS_CUSTOM_CMA_SETS', JSON.stringify(this.state.custom_cma_sets));
+      } catch (_) {}
+      if (this.state.active_cma_set_id === setId) {
+        this.state.active_cma_set_id = 'cma_base';
+      }
+    }
+  }
+
+  selectCmaSet(setId, bridge) {
+    this.state.active_cma_set_id = setId;
+    const customSet = this.state.custom_cma_sets && this.state.custom_cma_sets[setId];
+    if (customSet) {
+      this.state.active_scenario_id = customSet.scenario_id || 'base_5y';
+      this.state.carry_overrides = customSet.carry_overrides ? JSON.parse(JSON.stringify(customSet.carry_overrides)) : {};
+      bridge.sendCommand('scenarios.evaluate', {
+        scenario_id: this.state.active_scenario_id,
+        rebalancing_rule: this.state.rebalancing_rule,
+        carry_overrides: this.state.carry_overrides,
+        asset_return_overrides: customSet.asset_returns || {}
+      });
+    } else {
+      let scId = 'base_5y';
+      if (setId === 'cma_stagflation') scId = 'stagflation_5y';
+      if (setId === 'cma_disinflation') scId = 'disinflation_boom_5y';
+      this.state.active_scenario_id = scId;
+      this.state.carry_overrides = {};
+      bridge.sendCommand('scenarios.evaluate', {
+        scenario_id: scId,
+        rebalancing_rule: this.state.rebalancing_rule,
+        carry_overrides: {}
+      });
+    }
+  }
+
+  setComparisonSlot(slotIndex, portfolioId) {
+    if (slotIndex < 0 || slotIndex >= 6) return;
+    const slots = [...(this.state.comparison_slots || ['', '', '', '', '', ''])];
+    while (slots.length < 6) slots.push('');
+
+    // Disallow duplicate selection: if portfolioId is selected in another slot, clear that slot
+    if (portfolioId) {
+      for (let i = 0; i < 6; i++) {
+        if (i !== slotIndex && slots[i] === portfolioId) {
+          slots[i] = '';
+        }
+      }
+    }
+
+    slots[slotIndex] = portfolioId || '';
+    this.state.comparison_slots = slots;
+    try {
+      localStorage.setItem('lukb_comparison_slots', JSON.stringify(slots));
+    } catch (_) {}
+  }
+
+  initComparisonSlotsIfNeeded() {
+    const comp = this.state.results.comparison;
+    if (!comp || !Array.isArray(comp.summary_table)) return;
+
+    let slots = this.state.comparison_slots;
+    if (!Array.isArray(slots) || slots.length !== 6 || slots.every(s => !s)) {
+      try {
+        const saved = JSON.parse(localStorage.getItem('lukb_comparison_slots') || '[]');
+        if (Array.isArray(saved) && saved.length > 0) {
+          slots = saved.slice(0, 6);
+          while (slots.length < 6) slots.push('');
+        }
+      } catch (_) {}
+    }
+
+    if (!Array.isArray(slots) || slots.length !== 6 || slots.every(s => !s)) {
+      slots = ['', '', '', '', '', ''];
+      const activeId = this.state.active_portfolio_id || 'saa_50';
+      const available = comp.summary_table.map(x => x.portfolio_id);
+
+      if (available.includes(activeId)) slots[0] = activeId;
+      const activeUnh = `${activeId}_unhedged`;
+      if (available.includes(activeUnh)) slots[1] = activeUnh;
+
+      let slotIdx = 2;
+      for (const pid of available) {
+        if (slotIdx >= 6) break;
+        if (!slots.includes(pid) && !pid.endsWith('_unhedged')) {
+          slots[slotIdx++] = pid;
+        }
+      }
+    }
+
+    this.state.comparison_slots = slots;
   }
 
   subscribe(fn) {
@@ -290,8 +426,13 @@ export class AppStore {
       }
     }
 
+    if (res.custom_cma_sets && typeof res.custom_cma_sets === 'object') {
+      this.state.custom_cma_sets = { ...(this.state.custom_cma_sets || {}), ...res.custom_cma_sets };
+    }
+
     if (res.comparison) {
       this.state.results.comparison = res.comparison;
+      this.initComparisonSlotsIfNeeded();
     }
 
     if (res.cache_stats) {

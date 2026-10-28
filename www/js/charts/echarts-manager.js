@@ -322,30 +322,73 @@ export class EChartsManager {
     }, true);
   }
 
-  renderComparisonChart(containerId, crossModelData) {
+  renderComparisonChart(containerId, crossModelData, activeSelectedIds = null) {
     const inst = this.getOrCreate(containerId);
-    if (!inst || !Array.isArray(crossModelData) || crossModelData.length === 0) return;
+    if (!inst) return;
+    if (!Array.isArray(crossModelData) || crossModelData.length === 0) {
+      inst.clear();
+      return;
+    }
 
-    const models = [...new Set(crossModelData.map(d => d.model_label || d.model_id))];
-    const portfolios = [...new Set(crossModelData.map(d => d.portfolio_name || d.portfolio_id))];
-    const colors = ['#1d4ed8', '#0f766e', '#b45309', '#7c3aed', '#be123c'];
+    let filteredData = crossModelData;
+    if (Array.isArray(activeSelectedIds)) {
+      if (activeSelectedIds.length === 0) {
+        inst.clear();
+        return;
+      }
+      filteredData = crossModelData.filter(d => activeSelectedIds.includes(d.portfolio_id));
+    }
 
-    const series = portfolios.map((pName, idx) => ({
-      name: pName,
+    const models = [...new Set(filteredData.map(d => d.model_label || d.model_id))];
+    let portfolios = [];
+    if (Array.isArray(activeSelectedIds) && activeSelectedIds.length > 0) {
+      for (const pid of activeSelectedIds) {
+        const match = filteredData.find(d => d.portfolio_id === pid);
+        if (match) {
+          portfolios.push({
+            id: pid,
+            name: match.portfolio_name || match.portfolio_id
+          });
+        }
+      }
+    } else {
+      const seen = new Set();
+      for (const d of filteredData) {
+        const id = d.portfolio_id;
+        if (!seen.has(id)) {
+          seen.add(id);
+          portfolios.push({
+            id: id,
+            name: d.portfolio_name || id
+          });
+        }
+      }
+    }
+
+    if (portfolios.length === 0 || models.length === 0) {
+      inst.clear();
+      return;
+    }
+
+    const colors = ['#1d4ed8', '#0f766e', '#b45309', '#7c3aed', '#be123c', '#0284c7'];
+
+    const series = portfolios.map((pObj, idx) => ({
+      name: pObj.name,
       type: 'bar',
       data: models.map(mLabel => {
-        const match = crossModelData.find(
-          d => (d.portfolio_name || d.portfolio_id) === pName && (d.model_label || d.model_id) === mLabel
+        const match = filteredData.find(
+          d => d.portfolio_id === pObj.id && (d.model_label || d.model_id) === mLabel
         );
         return match ? Number((Number(match.vol_annualized || 0) * 100).toFixed(2)) : 0;
       }),
       itemStyle: { color: colors[idx % colors.length] }
     }));
 
+    inst.clear();
     inst.setOption({
       animation: false,
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      legend: { data: portfolios, top: 4, textStyle: { fontSize: 11 } },
+      legend: { data: portfolios.map(p => p.name), top: 4, textStyle: { fontSize: 11 } },
       grid: { left: 50, right: 20, top: 38, bottom: 52 },
       xAxis: { type: 'category', data: models, axisLabel: { fontSize: 10, interval: 0, rotate: 12 } },
       yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 } },

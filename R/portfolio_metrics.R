@@ -206,7 +206,8 @@ compare_portfolios <- function(configs,
                                meta,
                                benchmark_index = 1L,
                                extra_models = NULL,
-                               cache = NULL) {
+                               cache = NULL,
+                               scenario_eval = NULL) {
   if (length(configs) == 0L) {
     return(list(valid = FALSE, message = "Keine Portfoliokonfigurationen zum Vergleich übergeben."))
   }
@@ -273,6 +274,50 @@ compare_portfolios <- function(configs,
     te_var_m <- max(0.0, as.numeric(crossprod(delta_a, Sigma_m %*% delta_a)))
     te_ann <- sqrt(12.0 * te_var_m)
 
+    # Compute portfolio return metrics under current CMA scenario
+    cma_ret <- NA_real_
+    cma_unh <- NA_real_
+    cma_sharpe <- NA_real_
+
+    if (!is.null(scenario_eval) && isTRUE(scenario_eval$valid) && !is.null(scenario_eval$u_base_mat)) {
+      u_mat <- scenario_eval$u_base_mat
+      horizon <- nrow(u_mat)
+      asset_ids_scen <- colnames(u_mat)
+      z_list <- scenario_eval$z_ccy_list
+      asset_dt_scen <- scenario_eval$asset_dt
+
+      w_vec_scen <- as.numeric(ev$weights[asset_ids_scen])
+      w_vec_scen[is.na(w_vec_scen)] <- 0.0
+
+      h_vec_scen <- if (!is.null(ev$applied_h)) {
+        as.numeric(ev$applied_h[asset_ids_scen])
+      } else if (!is.null(ev$h_vector)) {
+        as.numeric(ev$h_vector[asset_ids_scen])
+      } else if (!is.null(ev$exposures$asset_table)) {
+        m_at <- match(asset_ids_scen, ev$exposures$asset_table$asset_id)
+        as.numeric(ev$exposures$asset_table$applied_h[m_at])
+      } else {
+        rep(0.0, length(asset_ids_scen))
+      }
+      h_vec_scen[is.na(h_vec_scen)] <- 0.0
+
+      port_h <- numeric(horizon)
+      port_u <- numeric(horizon)
+      for (y in seq_len(horizon)) {
+        u_y <- u_mat[y, ]
+        z_y <- vapply(asset_dt_scen$fx_exposure, function(ccy) {
+          if (ccy %in% names(z_list)) z_list[[ccy]]$z_base[y] else 0.0
+        }, numeric(1))
+        port_h[y] <- sum(w_vec_scen * (u_y + h_vec_scen * z_y))
+        port_u[y] <- sum(w_vec_scen * u_y)
+      }
+      cma_ret <- prod(1.0 + port_h)^(1.0 / horizon) - 1.0
+      cma_unh <- prod(1.0 + port_u)^(1.0 / horizon) - 1.0
+      if (!is.na(cma_ret) && ev$metrics$vol_annualized > 1e-6) {
+        cma_sharpe <- cma_ret / ev$metrics$vol_annualized
+      }
+    }
+
     summary_rows[[i]] <- data.table::data.table(
       portfolio_id = ev$portfolio_id,
       portfolio_name = ev$portfolio_name,
@@ -284,9 +329,12 @@ compare_portfolios <- function(configs,
       hedge_notional = ev$metrics$total_hedge_notional,
       foreign_after = ev$metrics$foreign_exposure_after,
       emeq_exposure = ev$metrics$emeq_exposure,
+      cma_return_hedged_ann = cma_ret,
+      cma_return_unhedged_ann = cma_unh,
       vol_unhedged_ann = ev$metrics$vol_unhedged_annualized,
       vol_hedged_ann = ev$metrics$vol_annualized,
       hedge_vol_effect_ann = ev$metrics$hedge_vol_effect_annualized,
+      cma_sharpe_ratio = cma_sharpe,
       diversification_ratio = ev$metrics$diversification_ratio,
       tracking_error_vs_bench_ann = te_ann,
       vol_diff_vs_bench_ann = ev$metrics$vol_annualized - bench$metrics$vol_annualized
