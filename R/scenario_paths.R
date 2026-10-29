@@ -160,7 +160,14 @@ evaluate_return_scenarios <- function(expectations,
   }
 
   # Asset-level scenario summary table (5Y geometric CAGRs per asset, local vs unhedged vs hedged)
-  asset_scen_rows <- vector("list", n_assets)
+  sc_cagr_loc <- numeric(n_assets)
+  sc_cagr_unh <- numeric(n_assets)
+  sc_cagr_hed <- numeric(n_assets)
+  sc_avg_carry <- numeric(n_assets)
+  sc_arith_loc <- numeric(n_assets)
+  sc_arith_hed <- numeric(n_assets)
+  sc_is_act <- if (!is.null(asset_dt$is_active)) as.logical(asset_dt$is_active) else rep(TRUE, n_assets)
+
   for (i in seq_len(n_assets)) {
     aid <- asset_ids[i]
     exp_ccy <- asset_dt$fx_exposure[i]
@@ -172,32 +179,33 @@ evaluate_return_scenarios <- function(expectations,
     u_vec <- u_base_mat[, aid]
     r_hedged_vec <- u_vec + h_i * z_vec
 
-    cagr_local <- prod(1.0 + r_loc_vec)^(1.0 / horizon) - 1.0
-    cagr_unhedged <- prod(1.0 + u_vec)^(1.0 / horizon) - 1.0
-    cagr_hedged <- prod(1.0 + r_hedged_vec)^(1.0 / horizon) - 1.0
-    avg_carry <- mean(carry_vec)
-
-    asset_scen_rows[[i]] <- data.table::data.table(
-      asset_id = aid,
-      name = asset_dt$name[i],
-      asset_class = asset_dt$asset_class[i],
-      return_currency = asset_dt$return_currency[i],
-      fx_exposure = exp_ccy,
-      is_domestic = asset_dt$is_domestic[i],
-      is_active = if (!is.null(asset_dt$is_active)) isTRUE(asset_dt$is_active[i]) else isTRUE(meta_dt[Code == aid, Active][1L]),
-      forward_available = asset_dt$forward_available[i],
-      hedge_eligible = asset_dt$hedge_eligible[i],
-      weight = asset_dt$weight[i],
-      applied_h = h_i,
-      cagr_local_5y = cagr_local,
-      cagr_unhedged_base_5y = cagr_unhedged,
-      cagr_hedged_base_5y = cagr_hedged,
-      avg_forward_carry_pa = ifelse(asset_dt$is_domestic[i] || asset_dt$is_emeq[i], 0.0, avg_carry),
-      arith_mean_local_pa = mean(r_loc_vec),
-      arith_mean_hedged_base_pa = mean(r_hedged_vec)
-    )
+    sc_cagr_loc[i] <- prod(1.0 + r_loc_vec)^(1.0 / horizon) - 1.0
+    sc_cagr_unh[i] <- prod(1.0 + u_vec)^(1.0 / horizon) - 1.0
+    sc_cagr_hed[i] <- prod(1.0 + r_hedged_vec)^(1.0 / horizon) - 1.0
+    sc_avg_carry[i] <- if (asset_dt$is_domestic[i] || asset_dt$is_emeq[i]) 0.0 else mean(carry_vec)
+    sc_arith_loc[i] <- mean(r_loc_vec)
+    sc_arith_hed[i] <- mean(r_hedged_vec)
   }
-  asset_scen_dt <- data.table::rbindlist(asset_scen_rows, fill = TRUE)
+
+  asset_scen_dt <- data.table::data.table(
+    asset_id = asset_ids,
+    name = asset_dt$name,
+    asset_class = asset_dt$asset_class,
+    return_currency = asset_dt$return_currency,
+    fx_exposure = asset_dt$fx_exposure,
+    is_domestic = asset_dt$is_domestic,
+    is_active = sc_is_act,
+    forward_available = asset_dt$forward_available,
+    hedge_eligible = asset_dt$hedge_eligible,
+    weight = asset_dt$weight,
+    applied_h = asset_dt$applied_h,
+    cagr_local_5y = sc_cagr_loc,
+    cagr_unhedged_base_5y = sc_cagr_unh,
+    cagr_hedged_base_5y = sc_cagr_hed,
+    avg_forward_carry_pa = sc_avg_carry,
+    arith_mean_local_pa = sc_arith_loc,
+    arith_mean_hedged_base_pa = sc_arith_hed
+  )
 
   # Evaluate portfolio 5-year path according to explicit rebalancing rule
   # IMPORTANT (Section 8): NEVER weight individual 5Y asset CAGRs and call that Portfolio CAGR!

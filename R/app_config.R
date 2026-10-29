@@ -80,6 +80,7 @@ compute_object_hash <- function(obj) {
 
 sanitize_for_json <- function(x) {
   if (is.null(x)) return(NULL)
+  if (isTRUE(attr(x, "maps_sanitized", exact = TRUE))) return(x)
   if (inherits(x, "Date") || inherits(x, "POSIXt")) {
     return(format(x, "%Y-%m-%d"))
   }
@@ -106,15 +107,14 @@ sanitize_for_json <- function(x) {
         col
       }
     })
-    col_names <- names(cols)
-    return(lapply(seq_len(nr), function(i) {
-      row_list <- lapply(cols, `[`, i)
-      names(row_list) <- col_names
-      row_list
-    }))
+    out_rows <- .mapply(list, cols, NULL)
+    attr(out_rows, "maps_sanitized") <- TRUE
+    return(out_rows)
   }
   if (is.list(x)) {
-    return(lapply(x, sanitize_for_json))
+    out_list <- lapply(x, sanitize_for_json)
+    attr(out_list, "maps_sanitized") <- TRUE
+    return(out_list)
   }
   x
 }

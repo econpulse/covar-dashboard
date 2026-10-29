@@ -134,56 +134,6 @@ get_or_build_risk_basis <- function(state,
   cache <- get_active_cache(state)
   reg <- state$dataset
 
-  # Precompute wide return & hedge table per (data_hash, base_ccy, cost_bps_pa, return_mode)
-  # This avoids re-converting 18,000+ observations to returns and re-triangulating FX crosses
-  # every time the universe changes!
-  wide_res <- cache$get_or_compute(
-    tier = "translated_wide_basis",
-    key_parts = list(
-      data_hash = reg$data_hash,
-      base_currency = base_ccy,
-      cost_bps_pa = as.numeric(cost_bps_pa),
-      return_mode = return_mode,
-      convention_version = "1.0.0"
-    ),
-    counter_name = "translated_wide_calls",
-    compute_fn = function() {
-      cr <- cross_fx_levels(state$spots, state$forwards, base_ccy = base_ccy)
-      r_loc <- index_levels_to_returns(reg$data, reg$meta)
-      u_b <- translate_asset_returns(r_loc, cr, reg$meta)
-      z_b <- build_forward_pnl(cr, cost_bps_pa = cost_bps_pa)
-      if (identical(return_mode, "EXCESS")) {
-        u_b <- apply_excess_returns(u_b, state$cash, base_ccy = base_ccy)
-      }
-      grid <- unique(u_b[, .(date, month_key, month_index)])
-      data.table::setorder(grid, month_index)
-      u_wide <- data.table::dcast(u_b[, .(month_index, Code, u_base)], month_index ~ Code, value.var = "u_base")
-      z_dt <- z_b$foreign_pnl
-      z_sub <- if (!is.null(z_dt) && nrow(z_dt) > 0L) {
-        z_dt[, .(month_index, component_id = paste0("HEDGE_", currency), z_base)]
-      } else {
-        data.table::data.table(month_index = integer(0), component_id = character(0), z_base = numeric(0))
-      }
-      z_wide <- if (nrow(z_sub) > 0L) {
-        data.table::dcast(z_sub, month_index ~ component_id, value.var = "z_base")
-      } else {
-        data.table::data.table(month_index = grid$month_index)
-      }
-      X_all <- merge(grid, u_wide, by = "month_index", all.x = TRUE)
-      X_all <- merge(X_all, z_wide, by = "month_index", all.x = TRUE)
-      data.table::setorder(X_all, month_index)
-
-      list(
-        u_b = u_b,
-        z_b = z_b,
-        cr = cr,
-        X_all = X_all
-      )
-    }
-  )
-
-  wide_cache <- wide_res$value
-
   fx_ret_res <- cache$get_or_compute(
     tier = "fx_returns",
     key_parts = list(
@@ -196,6 +146,57 @@ get_or_build_risk_basis <- function(state,
     ),
     counter_name = "fx_return_calls",
     compute_fn = function() {
+      # Precompute wide return & hedge table per (data_hash, base_ccy, cost_bps_pa, return_mode)
+      # This avoids re-converting 18,000+ observations to returns and re-triangulating FX crosses
+      # every time the universe changes!
+      wide_res <- cache$get_or_compute(
+        tier = "translated_wide_basis",
+        key_parts = list(
+          data_hash = reg$data_hash,
+          base_currency = base_ccy,
+          cost_bps_pa = as.numeric(cost_bps_pa),
+          return_mode = return_mode,
+          convention_version = "1.0.0"
+        ),
+        counter_name = "translated_wide_calls",
+        compute_fn = function() {
+          cr <- cross_fx_levels(state$spots, state$forwards, base_ccy = base_ccy)
+          r_loc <- index_levels_to_returns(reg$data, reg$meta)
+          u_b <- translate_asset_returns(r_loc, cr, reg$meta)
+          z_b <- build_forward_pnl(cr, cost_bps_pa = cost_bps_pa)
+          if (identical(return_mode, "EXCESS")) {
+            u_b <- apply_excess_returns(u_b, state$cash, base_ccy = base_ccy)
+          }
+          grid <- unique(u_b[, .(date, month_key, month_index)])
+          data.table::setorder(grid, month_index)
+          u_wide <- data.table::dcast(u_b[, .(month_index, Code, u_base)], month_index ~ Code, value.var = "u_base")
+          z_dt <- z_b$foreign_pnl
+          z_sub <- if (!is.null(z_dt) && nrow(z_dt) > 0L) {
+            z_dt[, .(month_index, component_id = paste0("HEDGE_", currency), z_base)]
+          } else {
+            data.table::data.table(month_index = integer(0), component_id = character(0), z_base = numeric(0))
+          }
+          z_wide <- if (nrow(z_sub) > 0L) {
+            data.table::dcast(z_sub, month_index ~ component_id, value.var = "z_base")
+          } else {
+            data.table::data.table(month_index = grid$month_index)
+          }
+          X_all <- merge(grid, u_wide, by = "month_index", all.x = TRUE)
+          X_all <- merge(X_all, z_wide, by = "month_index", all.x = TRUE)
+          data.table::setorder(X_all, month_index)
+
+          list(
+            valid = TRUE,
+            u_b = u_b,
+            z_b = z_b,
+            cr = cr,
+            X_all = X_all
+          )
+        }
+      )
+
+      wide_cache <- wide_res$value
+
       build_risk_basis(
         u = wide_cache$u_b,
         z = wide_cache$z_b,

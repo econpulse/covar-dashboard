@@ -43,7 +43,7 @@ export class EChartsManager {
     }
 
     if (!inst) {
-      inst = window.echarts.init(el, null, { renderer: 'canvas' });
+      inst = window.echarts.init(el, null, { renderer: 'canvas', useDirtyRect: true });
       this.instances.set(containerId, inst);
       if (this.resizeObserver) {
         this.resizeObserver.observe(el);
@@ -105,16 +105,25 @@ export class EChartsManager {
           itemStyle: { color: '#0f766e' }
         }
       ]
-    }, true);
+    }, false);
   }
 
   renderHistoricalPathChart(containerId, histPath, baseCcy) {
     const inst = this.getOrCreate(containerId);
-    if (!inst || !histPath || !Array.isArray(histPath.series)) return;
+    if (!inst || !histPath) return;
 
-    const months = histPath.series.map(d => d.month_key);
-    const wHedged = histPath.series.map(d => Number(Number(d.wealth_hedged || 100).toFixed(2)));
-    const wUnhedged = histPath.series.map(d => Number(Number(d.wealth_unhedged || 100).toFixed(2)));
+    let months, wHedged, wUnhedged;
+    if (Array.isArray(histPath.month_keys)) {
+      months = histPath.month_keys;
+      wHedged = Array.isArray(histPath.wealth_hedged) ? histPath.wealth_hedged : [];
+      wUnhedged = Array.isArray(histPath.wealth_unhedged) ? histPath.wealth_unhedged : [];
+    } else if (Array.isArray(histPath.series)) {
+      months = histPath.series.map(d => d.month_key);
+      wHedged = histPath.series.map(d => Number(Number(d.wealth_hedged || 100).toFixed(2)));
+      wUnhedged = histPath.series.map(d => Number(Number(d.wealth_unhedged || 100).toFixed(2)));
+    } else {
+      return;
+    }
 
     inst.setOption({
       animation: false,
@@ -132,6 +141,7 @@ export class EChartsManager {
           name: `Mit Hedge (${baseCcy})`,
           type: 'line',
           showSymbol: false,
+          sampling: 'lttb',
           data: wHedged,
           lineStyle: { width: 2, color: '#1d4ed8' },
           itemStyle: { color: '#1d4ed8' }
@@ -140,12 +150,13 @@ export class EChartsManager {
           name: `Ungesichert (${baseCcy})`,
           type: 'line',
           showSymbol: false,
+          sampling: 'lttb',
           data: wUnhedged,
           lineStyle: { width: 1.5, type: 'dashed', color: '#64748b' },
           itemStyle: { color: '#64748b' }
         }
       ]
-    }, true);
+    }, false);
   }
 
   renderCurrencyExposureChart(containerId, currencyTable) {
@@ -173,7 +184,7 @@ export class EChartsManager {
         { name: 'Hedge-Nominal g (%)', type: 'bar', data: hedgeVals, itemStyle: { color: '#f59e0b' } },
         { name: 'Exposure nach Hedge (%)', type: 'bar', data: afterVals, itemStyle: { color: '#0f766e' } }
       ]
-    }, true);
+    }, false);
   }
 
   renderCorrelationHeatmap(containerId, corrObj) {
@@ -384,7 +395,6 @@ export class EChartsManager {
       itemStyle: { color: colors[idx % colors.length] }
     }));
 
-    inst.clear();
     inst.setOption({
       animation: false,
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
@@ -393,6 +403,6 @@ export class EChartsManager {
       xAxis: { type: 'category', data: models, axisLabel: { fontSize: 10, interval: 0, rotate: 12 } },
       yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 } },
       series: series
-    }, true);
+    }, { replaceMerge: ['series'] });
   }
 }

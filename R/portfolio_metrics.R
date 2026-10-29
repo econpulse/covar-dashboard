@@ -109,29 +109,58 @@ evaluate_portfolio <- function(weights,
   asset_hedged_vol_ann <- sqrt(pmax(0.0, diag(Sigma_assets_ann)))
   asset_unhedged_vol_ann <- as.numeric(model$vol_annualized[asset_ids])
 
-  asset_rc_dt <- merge(
-    hedges$asset_table[, .(asset_id, name, asset_class, fx_exposure, weight, applied_h, hedge_notional, post_hedge_exposure, eligibility_reason)],
-    data.table::data.table(
-      asset_id = asset_ids,
-      unhedged_vol_ann = asset_unhedged_vol_ann,
-      hedged_vol_ann = asset_hedged_vol_ann,
-      marginal_risk_ann = asset_mrc_ann,
-      risk_contribution_ann = asset_rc_ann,
-      pct_risk_contribution = asset_pcr
-    ),
-    by = "asset_id",
-    sort = FALSE
+  at_ref <- hedges$asset_table
+  m_at <- match(asset_ids, at_ref$asset_id)
+  ac_col <- at_ref$asset_class[m_at]
+  w_col <- at_ref$weight[m_at]
+  hn_col <- at_ref$hedge_notional[m_at]
+
+  asset_rc_dt <- data.table::data.table(
+    asset_id = asset_ids,
+    name = at_ref$name[m_at],
+    asset_class = ac_col,
+    fx_exposure = at_ref$fx_exposure[m_at],
+    weight = w_col,
+    applied_h = at_ref$applied_h[m_at],
+    hedge_notional = hn_col,
+    post_hedge_exposure = at_ref$post_hedge_exposure[m_at],
+    eligibility_reason = at_ref$eligibility_reason[m_at],
+    unhedged_vol_ann = asset_unhedged_vol_ann,
+    hedged_vol_ann = asset_hedged_vol_ann,
+    marginal_risk_ann = asset_mrc_ann,
+    risk_contribution_ann = asset_rc_ann,
+    pct_risk_contribution = asset_pcr
   )
 
   # Asset-class risk contribution summary
-  class_rc_dt <- asset_rc_dt[, .(
-    weight = sum(weight, na.rm = TRUE),
-    hedge_notional = sum(hedge_notional, na.rm = TRUE),
-    standalone_vol_ann = ifelse(sum(weight, na.rm = TRUE) > 1e-12, sum(weight * hedged_vol_ann, na.rm = TRUE) / sum(weight, na.rm = TRUE), 0.0),
-    marginal_risk_ann = ifelse(sum(weight, na.rm = TRUE) > 1e-12, sum(risk_contribution_ann, na.rm = TRUE) / sum(weight, na.rm = TRUE), 0.0),
-    risk_contribution_ann = sum(risk_contribution_ann, na.rm = TRUE),
-    pct_risk_contribution = sum(pct_risk_contribution, na.rm = TRUE)
-  ), by = asset_class]
+  uniq_ac <- unique(ac_col)
+  n_ac <- length(uniq_ac)
+  ac_w <- numeric(n_ac)
+  ac_hn <- numeric(n_ac)
+  ac_svol <- numeric(n_ac)
+  ac_mrc <- numeric(n_ac)
+  ac_rc <- numeric(n_ac)
+  ac_pcr <- numeric(n_ac)
+  for (k in seq_len(n_ac)) {
+    idx_k <- which(ac_col == uniq_ac[k])
+    w_s <- sum(w_col[idx_k], na.rm = TRUE)
+    rc_s <- sum(asset_rc_ann[idx_k], na.rm = TRUE)
+    ac_w[k] <- w_s
+    ac_hn[k] <- sum(hn_col[idx_k], na.rm = TRUE)
+    ac_svol[k] <- if (w_s > 1e-12) sum(w_col[idx_k] * asset_hedged_vol_ann[idx_k], na.rm = TRUE) / w_s else 0.0
+    ac_mrc[k] <- if (w_s > 1e-12) rc_s / w_s else 0.0
+    ac_rc[k] <- rc_s
+    ac_pcr[k] <- sum(asset_pcr[idx_k], na.rm = TRUE)
+  }
+  class_rc_dt <- data.table::data.table(
+    asset_class = uniq_ac,
+    weight = ac_w,
+    hedge_notional = ac_hn,
+    standalone_vol_ann = ac_svol,
+    marginal_risk_ann = ac_mrc,
+    risk_contribution_ann = ac_rc,
+    pct_risk_contribution = ac_pcr
+  )
 
   # Historical mean return projection (diagnostic only, not forward expectation)
   mu_m <- model$mean_monthly[comp_ids]
@@ -216,6 +245,9 @@ compare_portfolios <- function(configs,
 
   evals <- lapply(seq_along(configs), function(i) {
     cfg <- configs[[i]]
+    if (!is.null(cfg$precomputed_eval) && isTRUE(cfg$precomputed_eval$valid)) {
+      return(cfg$precomputed_eval)
+    }
     pid <- cfg$id %||% paste0("saa_", i)
     pname <- cfg$name %||% paste0("SAA ", i)
     if (!is.null(cache)) {
@@ -224,7 +256,7 @@ compare_portfolios <- function(configs,
         key_parts = list(
           model_hash = model$model_hash,
           portfolio_id = pid,
-          weights = round(as.numeric(cfg$weights), 10),
+          weights = round(cfg$weights, 10),
           hedge_config = cfg$hedge_config,
           cost_bps_pa = as.numeric(cfg$cost_bps_pa %||% 0.0)
         ),
@@ -259,35 +291,66 @@ compare_portfolios <- function(configs,
     return(list(valid = FALSE, evaluations = evals))
   }
 
-  b_idx <- min(max(1L, as.integer(benchmark_index)), length(evals))
+  n_evals <- length(evals)
+  b_idx <- min(max(1L, as.integer(benchmark_index)), n_evals)
   bench <- evals[[b_idx]]
   Sigma_m <- model$Sigma_monthly
   comp_ids <- model$component_ids
+  n_comp <- length(comp_ids)
 
-  summary_rows <- vector("list", length(evals))
-  delta_rows <- vector("list", length(evals))
-  pairwise_te <- matrix(0.0, nrow = length(evals), ncol = length(evals))
+  pairwise_te <- matrix(0.0, nrow = n_evals, ncol = n_evals)
   p_ids <- vapply(evals, function(x) x$portfolio_id, character(1))
   dimnames(pairwise_te) <- list(p_ids, p_ids)
 
-  for (i in seq_along(evals)) {
+  # Precompute scenario z matrix once if scenario_eval is provided
+  has_scen <- !is.null(scenario_eval) && isTRUE(scenario_eval$valid) && !is.null(scenario_eval$u_base_mat)
+  if (has_scen) {
+    u_mat <- scenario_eval$u_base_mat
+    horizon <- nrow(u_mat)
+    asset_ids_scen <- colnames(u_mat)
+    z_list <- scenario_eval$z_ccy_list
+    fx_exp_scen <- scenario_eval$asset_dt$fx_exposure
+    z_mat <- matrix(0.0, nrow = horizon, ncol = length(asset_ids_scen))
+    for (y in seq_len(horizon)) {
+      z_mat[y, ] <- vapply(fx_exp_scen, function(ccy) {
+        if (ccy %in% names(z_list)) z_list[[ccy]]$z_base[y] else 0.0
+      }, numeric(1))
+    }
+  }
+
+  sum_pid <- character(n_evals)
+  sum_pname <- character(n_evals)
+  sum_hash <- character(n_evals)
+  sum_bccy <- character(n_evals)
+  sum_mid <- character(n_evals)
+  sum_eq <- numeric(n_evals)
+  sum_fb <- numeric(n_evals)
+  sum_hn <- numeric(n_evals)
+  sum_fa <- numeric(n_evals)
+  sum_em <- numeric(n_evals)
+  sum_cma_h <- rep(NA_real_, n_evals)
+  sum_cma_u <- rep(NA_real_, n_evals)
+  sum_vol_u <- numeric(n_evals)
+  sum_vol_h <- numeric(n_evals)
+  sum_h_eff <- numeric(n_evals)
+  sum_sharpe <- rep(NA_real_, n_evals)
+  sum_div <- numeric(n_evals)
+  sum_te <- numeric(n_evals)
+  sum_vdiff <- numeric(n_evals)
+
+  delta_pid <- character(n_evals * n_comp)
+  delta_exp_p <- numeric(n_evals * n_comp)
+  delta_exp_d <- numeric(n_evals * n_comp)
+
+  bench_a_num <- as.numeric(bench$a_vector)
+
+  for (i in seq_len(n_evals)) {
     ev <- evals[[i]]
     delta_a <- ev$a_vector - bench$a_vector
     te_var_m <- max(0.0, as.numeric(crossprod(delta_a, Sigma_m %*% delta_a)))
     te_ann <- sqrt(12.0 * te_var_m)
 
-    # Compute portfolio return metrics under current CMA scenario
-    cma_ret <- NA_real_
-    cma_unh <- NA_real_
-    cma_sharpe <- NA_real_
-
-    if (!is.null(scenario_eval) && isTRUE(scenario_eval$valid) && !is.null(scenario_eval$u_base_mat)) {
-      u_mat <- scenario_eval$u_base_mat
-      horizon <- nrow(u_mat)
-      asset_ids_scen <- colnames(u_mat)
-      z_list <- scenario_eval$z_ccy_list
-      asset_dt_scen <- scenario_eval$asset_dt
-
+    if (has_scen) {
       w_vec_scen <- as.numeric(ev$weights[asset_ids_scen])
       w_vec_scen[is.na(w_vec_scen)] <- 0.0
 
@@ -302,57 +365,43 @@ compare_portfolios <- function(configs,
         rep(0.0, length(asset_ids_scen))
       }
       h_vec_scen[is.na(h_vec_scen)] <- 0.0
+      wh_vec <- w_vec_scen * h_vec_scen
 
-      port_h <- numeric(horizon)
-      port_u <- numeric(horizon)
-      for (y in seq_len(horizon)) {
-        u_y <- u_mat[y, ]
-        z_y <- vapply(asset_dt_scen$fx_exposure, function(ccy) {
-          if (ccy %in% names(z_list)) z_list[[ccy]]$z_base[y] else 0.0
-        }, numeric(1))
-        port_h[y] <- sum(w_vec_scen * (u_y + h_vec_scen * z_y))
-        port_u[y] <- sum(w_vec_scen * u_y)
-      }
+      port_u <- as.numeric(u_mat %*% w_vec_scen)
+      port_h <- port_u + as.numeric(z_mat %*% wh_vec)
       cma_ret <- prod(1.0 + port_h)^(1.0 / horizon) - 1.0
       cma_unh <- prod(1.0 + port_u)^(1.0 / horizon) - 1.0
+      sum_cma_h[i] <- cma_ret
+      sum_cma_u[i] <- cma_unh
       if (!is.na(cma_ret) && ev$metrics$vol_annualized > 1e-6) {
-        cma_sharpe <- cma_ret / ev$metrics$vol_annualized
+        sum_sharpe[i] <- cma_ret / ev$metrics$vol_annualized
       }
     }
 
-    summary_rows[[i]] <- data.table::data.table(
-      portfolio_id = ev$portfolio_id,
-      portfolio_name = ev$portfolio_name,
-      config_hash = ev$config_hash,
-      base_currency = ev$base_currency,
-      model_id = ev$model_id,
-      equity_share = ev$metrics$equity_share,
-      foreign_before = ev$metrics$foreign_exposure_before,
-      hedge_notional = ev$metrics$total_hedge_notional,
-      foreign_after = ev$metrics$foreign_exposure_after,
-      emeq_exposure = ev$metrics$emeq_exposure,
-      cma_return_hedged_ann = cma_ret,
-      cma_return_unhedged_ann = cma_unh,
-      vol_unhedged_ann = ev$metrics$vol_unhedged_annualized,
-      vol_hedged_ann = ev$metrics$vol_annualized,
-      hedge_vol_effect_ann = ev$metrics$hedge_vol_effect_annualized,
-      cma_sharpe_ratio = cma_sharpe,
-      diversification_ratio = ev$metrics$diversification_ratio,
-      tracking_error_vs_bench_ann = te_ann,
-      vol_diff_vs_bench_ann = ev$metrics$vol_annualized - bench$metrics$vol_annualized
-    )
+    sum_pid[i] <- ev$portfolio_id
+    sum_pname[i] <- ev$portfolio_name
+    sum_hash[i] <- ev$config_hash
+    sum_bccy[i] <- ev$base_currency
+    sum_mid[i] <- ev$model_id
+    sum_eq[i] <- ev$metrics$equity_share
+    sum_fb[i] <- ev$metrics$foreign_exposure_before
+    sum_hn[i] <- ev$metrics$total_hedge_notional
+    sum_fa[i] <- ev$metrics$foreign_exposure_after
+    sum_em[i] <- ev$metrics$emeq_exposure
+    sum_vol_u[i] <- ev$metrics$vol_unhedged_annualized
+    sum_vol_h[i] <- ev$metrics$vol_annualized
+    sum_h_eff[i] <- ev$metrics$hedge_vol_effect_annualized
+    sum_div[i] <- ev$metrics$diversification_ratio
+    sum_te[i] <- te_ann
+    sum_vdiff[i] <- ev$metrics$vol_annualized - bench$metrics$vol_annualized
 
-    delta_rows[[i]] <- data.table::data.table(
-      portfolio_id = ev$portfolio_id,
-      benchmark_id = bench$portfolio_id,
-      component_id = comp_ids,
-      exposure_portfolio = as.numeric(ev$a_vector),
-      exposure_benchmark = as.numeric(bench$a_vector),
-      delta_exposure = as.numeric(delta_a)
-    )
+    idx_range <- ((i - 1L) * n_comp + 1L):(i * n_comp)
+    delta_pid[idx_range] <- ev$portfolio_id
+    delta_exp_p[idx_range] <- as.numeric(ev$a_vector)
+    delta_exp_d[idx_range] <- as.numeric(delta_a)
 
-    for (j in seq_along(evals)) {
-      if (i < j) {
+    if (i < n_evals) {
+      for (j in (i + 1L):n_evals) {
         da_ij <- evals[[i]]$a_vector - evals[[j]]$a_vector
         te_ij <- sqrt(12.0 * max(0.0, as.numeric(crossprod(da_ij, Sigma_m %*% da_ij))))
         pairwise_te[i, j] <- te_ij
@@ -361,35 +410,87 @@ compare_portfolios <- function(configs,
     }
   }
 
+  summary_dt <- data.table::data.table(
+    portfolio_id = sum_pid,
+    portfolio_name = sum_pname,
+    config_hash = sum_hash,
+    base_currency = sum_bccy,
+    model_id = sum_mid,
+    equity_share = sum_eq,
+    foreign_before = sum_fb,
+    hedge_notional = sum_hn,
+    foreign_after = sum_fa,
+    emeq_exposure = sum_em,
+    cma_return_hedged_ann = sum_cma_h,
+    cma_return_unhedged_ann = sum_cma_u,
+    vol_unhedged_ann = sum_vol_u,
+    vol_hedged_ann = sum_vol_h,
+    hedge_vol_effect_ann = sum_h_eff,
+    cma_sharpe_ratio = sum_sharpe,
+    diversification_ratio = sum_div,
+    tracking_error_vs_bench_ann = sum_te,
+    vol_diff_vs_bench_ann = sum_vdiff
+  )
+
+  delta_dt <- data.table::data.table(
+    portfolio_id = delta_pid,
+    benchmark_id = rep(bench$portfolio_id, n_evals * n_comp),
+    component_id = rep(comp_ids, times = n_evals),
+    exposure_portfolio = delta_exp_p,
+    exposure_benchmark = rep(bench_a_num, times = n_evals),
+    delta_exposure = delta_exp_d
+  )
+
   # Fast cross-model sensitivity table using pre-computed exposure vectors a_vec and a_unhedged
   cross_model_dt <- data.table::data.table()
   if (!is.null(extra_models) && length(extra_models) > 0L) {
-    cm_list <- list()
-    for (m_obj in extra_models) {
-      if (!isTRUE(m_obj$valid)) next
-      S_m <- m_obj$Sigma_monthly
-      m_cids <- m_obj$component_ids
-      for (ev_i in evals) {
-        a_v <- ev_i$a_vector[m_cids]
-        a_u <- assemble_exposure_vector(ev_i$weights, NULL, m_cids)
-        v_h <- sqrt(12.0 * max(0.0, as.numeric(crossprod(a_v, S_m %*% a_v))))
-        v_u <- sqrt(12.0 * max(0.0, as.numeric(crossprod(a_u, S_m %*% a_u))))
-        cm_list[[length(cm_list) + 1L]] <- data.table::data.table(
-          portfolio_id = ev_i$portfolio_id,
-          portfolio_name = ev_i$portfolio_name,
-          model_id = m_obj$model_id,
-          model_label = m_obj$label,
-          n_obs = m_obj$n_obs,
-          start_month = m_obj$start_month,
-          end_month = m_obj$end_month,
-          vol_annualized = v_h,
-          vol_unhedged_annualized = v_u,
-          hedge_vol_effect_annualized = v_h - v_u
-        )
+    valid_models <- Filter(function(m) isTRUE(m$valid), extra_models)
+    n_vm <- length(valid_models)
+    if (n_vm > 0L) {
+      n_tot <- n_vm * n_evals
+      cm_pid <- character(n_tot)
+      cm_pname <- character(n_tot)
+      cm_mid <- character(n_tot)
+      cm_mlabel <- character(n_tot)
+      cm_nobs <- integer(n_tot)
+      cm_smonth <- character(n_tot)
+      cm_emonth <- character(n_tot)
+      cm_vol_h <- numeric(n_tot)
+      cm_vol_u <- numeric(n_tot)
+
+      k_idx <- 0L
+      for (m_obj in valid_models) {
+        S_m <- m_obj$Sigma_monthly
+        m_cids <- m_obj$component_ids
+        for (ev_i in evals) {
+          k_idx <- k_idx + 1L
+          a_v <- ev_i$a_vector[m_cids]
+          a_u <- assemble_exposure_vector(ev_i$weights, NULL, m_cids)
+          v_h <- sqrt(12.0 * max(0.0, as.numeric(crossprod(a_v, S_m %*% a_v))))
+          v_u <- sqrt(12.0 * max(0.0, as.numeric(crossprod(a_u, S_m %*% a_u))))
+          cm_pid[k_idx] <- ev_i$portfolio_id
+          cm_pname[k_idx] <- ev_i$portfolio_name
+          cm_mid[k_idx] <- m_obj$model_id
+          cm_mlabel[k_idx] <- m_obj$label
+          cm_nobs[k_idx] <- as.integer(m_obj$n_obs)
+          cm_smonth[k_idx] <- as.character(m_obj$start_month)
+          cm_emonth[k_idx] <- as.character(m_obj$end_month)
+          cm_vol_h[k_idx] <- v_h
+          cm_vol_u[k_idx] <- v_u
+        }
       }
-    }
-    if (length(cm_list) > 0L) {
-      cross_model_dt <- data.table::rbindlist(cm_list, fill = TRUE)
+      cross_model_dt <- data.table::data.table(
+        portfolio_id = cm_pid,
+        portfolio_name = cm_pname,
+        model_id = cm_mid,
+        model_label = cm_mlabel,
+        n_obs = cm_nobs,
+        start_month = cm_smonth,
+        end_month = cm_emonth,
+        vol_annualized = cm_vol_h,
+        vol_unhedged_annualized = cm_vol_u,
+        hedge_vol_effect_annualized = cm_vol_h - cm_vol_u
+      )
     }
   }
 
@@ -398,8 +499,8 @@ compare_portfolios <- function(configs,
     benchmark_id = bench$portfolio_id,
     base_currency = model$base_currency,
     model_id = model$model_id,
-    summary_table = data.table::rbindlist(summary_rows, fill = TRUE),
-    delta_exposures = data.table::rbindlist(delta_rows, fill = TRUE),
+    summary_table = summary_dt,
+    delta_exposures = delta_dt,
     pairwise_tracking_error = pairwise_te,
     cross_model_comparison = cross_model_dt,
     evaluations = stats::setNames(evals, p_ids)

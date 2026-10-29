@@ -185,14 +185,25 @@ export class ShinyBridge {
     return requestId;
   }
 
-  sendDebounced(type, payload = {}, delayMs = 200) {
+  sendDebounced(type, payload = {}, delayMs = 350) {
     if (this.debounceTimers[type]) {
       clearTimeout(this.debounceTimers[type]);
     }
-    // Immediate client-side preview while debouncing
-    this.store.computeClientSidePreview();
     this.store.state.dirty_flags.has_unapplied_changes = true;
-    this.store.setCalcState('dirty');
+    // Coalesce high-frequency Citrix slider input previews into one animation frame
+    if (!this.rafPreviewPending) {
+      this.rafPreviewPending = true;
+      const runPreview = () => {
+        this.rafPreviewPending = false;
+        this.store.computeClientSidePreview();
+        this.store.setCalcState('dirty');
+      };
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(runPreview);
+      } else {
+        runPreview();
+      }
+    }
 
     this.debounceTimers[type] = setTimeout(() => {
       delete this.debounceTimers[type];

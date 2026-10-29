@@ -149,7 +149,9 @@ serialize_portfolio_eval <- function(ev, hist_path = NULL) {
         realized_vol_ann = hist_path$realized_vol_ann,
         realized_historical_cagr = hist_path$realized_historical_cagr,
         max_drawdown = hist_path$max_drawdown,
-        series = hist_path$path
+        month_keys = as.character(hist_path$path$month_key),
+        wealth_hedged = round(as.numeric(hist_path$path$wealth_hedged), 2),
+        wealth_unhedged = round(as.numeric(hist_path$path$wealth_unhedged), 2)
       )
     } else NULL
   ))
@@ -448,7 +450,8 @@ run_full_evaluation_pipeline <- function(state,
       name = p_name,
       weights = w_p,
       hedge_config = hc_p,
-      cost_bps_pa = state$cost_bps_pa
+      cost_bps_pa = state$cost_bps_pa,
+      precomputed_eval = if (identical(pid, portfolio_id)) port_eval else NULL
     )
 
     # 2. Unhedged variant (0% FX hedge)
@@ -550,7 +553,6 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
       list(
         benchmark_id = comp_eval$benchmark_id,
         summary_table = comp_eval$summary_table,
-        delta_exposures = comp_eval$delta_exposures,
         pairwise_tracking_error = list(
           portfolio_ids = rownames(comp_eval$pairwise_tracking_error),
           matrix = te_rows,

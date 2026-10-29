@@ -65,6 +65,23 @@ derive_prehedge_exposures <- function(weights,
     available_hedge_currencies <- setdiff(unique(c("USD", "CHF", avail_fwd_ccys)), base_ccy)
   }
 
+  is_dom_vec <- (sub_meta$FX_Exposure == base_ccy)
+  is_em_vec <- (sub_meta$FX_Exposure == "EMEQ")
+  is_ovl_vec <- (sub_meta$Return_Structure == "FUTURES_TR")
+  meta_ha_vec <- !is.na(sub_meta$Hedge_Allowed) & (sub_meta$Hedge_Allowed == TRUE)
+  def_hr_vec <- ifelse(is.na(sub_meta$Default_Hedge_Ratio), 0.0, as.numeric(sub_meta$Default_Hedge_Ratio))
+  is_act_vec <- ifelse(is.na(sub_meta$Active), TRUE, as.logical(sub_meta$Active))
+  fwd_avail_vec <- ifelse(is_dom_vec, TRUE, ifelse(is_em_vec, FALSE, sub_meta$FX_Exposure %in% available_hedge_currencies))
+  hedge_elig_vec <- (!is_dom_vec) & (!is_em_vec) & meta_ha_vec & fwd_avail_vec
+  elig_reason_vec <- ifelse(
+    is_dom_vec, "INLAND_KEIN_HEDGE",
+    ifelse(is_em_vec, "EMEQ_NICHT_HEDGEBAR",
+      ifelse(!meta_ha_vec, "METADATEN_GESPERRT",
+        ifelse(!fwd_avail_vec, "FORWARD_DATEN_FEHLEN", "HEDGEFAEHIG")
+      )
+    )
+  )
+
   asset_dt <- data.table::data.table(
     asset_id = w_Ids,
     name = sub_meta$Name,
@@ -74,77 +91,70 @@ derive_prehedge_exposures <- function(weights,
     fx_exposure = sub_meta$FX_Exposure,
     return_structure = sub_meta$Return_Structure,
     weight = w_vals,
-    is_domestic = (sub_meta$FX_Exposure == base_ccy),
-    is_emeq = (sub_meta$FX_Exposure == "EMEQ"),
-    is_contractual_overlay = (sub_meta$Return_Structure == "FUTURES_TR"),
-    meta_hedge_allowed = isTRUE(sub_meta$Hedge_Allowed) | (sub_meta$Hedge_Allowed == TRUE),
-    default_hedge_ratio = ifelse(is.na(sub_meta$Default_Hedge_Ratio), 0.0, as.numeric(sub_meta$Default_Hedge_Ratio)),
-    is_active = ifelse(is.na(sub_meta$Active), TRUE, as.logical(sub_meta$Active))
+    is_domestic = is_dom_vec,
+    is_emeq = is_em_vec,
+    is_contractual_overlay = is_ovl_vec,
+    meta_hedge_allowed = meta_ha_vec,
+    default_hedge_ratio = def_hr_vec,
+    is_active = is_act_vec,
+    forward_available = fwd_avail_vec,
+    hedge_eligible = hedge_elig_vec,
+    eligibility_reason = elig_reason_vec
   )
-
-  asset_dt[, forward_available := ifelse(
-    is_domestic,
-    TRUE,
-    ifelse(is_emeq, FALSE, fx_exposure %in% available_hedge_currencies)
-  )]
-
-  asset_dt[, hedge_eligible := (!is_domestic) & (!is_emeq) & meta_hedge_allowed & forward_available]
-
-  asset_dt[, eligibility_reason := ifelse(
-    is_domestic, "INLAND_KEIN_HEDGE",
-    ifelse(is_emeq, "EMEQ_NICHT_HEDGEBAR",
-      ifelse(!meta_hedge_allowed, "METADATEN_GESPERRT",
-        ifelse(!forward_available, "FORWARD_DATEN_FEHLEN", "HEDGEFAEHIG")
-      )
-    )
-  )]
 
   # Aggregate currency exposure table before hedge
   # Keep all relevant exposure buckets (base_ccy, available foreign hedge currencies, asset exposures) visible
-  all_exp_buckets <- unique(c(base_ccy, available_hedge_currencies, asset_dt$fx_exposure))
+  all_exp_buckets <- unique(c(base_ccy, available_hedge_currencies, sub_meta$FX_Exposure))
   all_exp_buckets <- c(base_ccy, setdiff(all_exp_buckets, base_ccy))
-  ccy_rows <- lapply(all_exp_buckets, function(ccy) {
-    sub <- asset_dt[fx_exposure == ccy]
-    e_before <- sum(sub$weight, na.rm = TRUE)
-    e_hedgeable <- sum(sub[hedge_eligible == TRUE, weight], na.rm = TRUE)
-    e_locked <- sum(sub[hedge_eligible == FALSE, weight], na.rm = TRUE)
-    is_dom <- identical(ccy, base_ccy)
-    is_em <- identical(ccy, "EMEQ")
-    fwd_ok <- if (is_dom) TRUE else if (is_em) FALSE else (ccy %in% available_hedge_currencies)
+  n_ccy <- length(all_exp_buckets)
 
-    status_code <- if (is_dom) {
-      "DOMESTIC"
-    } else if (is_em) {
-      "EMEQ_UNHEDGED"
-    } else if (!fwd_ok) {
-      "MISSING_FORWARD"
-    } else {
-      "HEDGEABLE"
-    }
-
-    carry_val <- if (is_dom) {
-      0.0
-    } else if (!is.null(fx_carry) && ccy %in% names(fx_carry)) {
-      as.numeric(fx_carry[[ccy]])
-    } else {
-      NA_real_
-    }
-
-    data.table::data.table(
-      base_currency = base_ccy,
-      fx_exposure = ccy,
-      is_domestic = is_dom,
-      is_emeq = is_em,
-      forward_available = fwd_ok,
-      status = status_code,
-      exposure_before_hedge = e_before,
-      hedgeable_exposure = e_hedgeable,
-      non_hedgeable_exposure = e_locked,
-      latest_carry_pa = carry_val,
-      contractual_overlay_exposure = sum(sub[is_contractual_overlay == TRUE, weight], na.rm = TRUE)
+  ccy_is_dom <- all_exp_buckets == base_ccy
+  ccy_is_em <- all_exp_buckets == "EMEQ"
+  ccy_fwd_ok <- ifelse(ccy_is_dom, TRUE, ifelse(ccy_is_em, FALSE, all_exp_buckets %in% available_hedge_currencies))
+  ccy_status <- ifelse(
+    ccy_is_dom, "DOMESTIC",
+    ifelse(ccy_is_em, "EMEQ_UNHEDGED",
+      ifelse(!ccy_fwd_ok, "MISSING_FORWARD", "HEDGEABLE")
     )
-  })
-  currency_dt <- data.table::rbindlist(ccy_rows, fill = TRUE)
+  )
+  ccy_e_before <- numeric(n_ccy)
+  ccy_e_hedgeable <- numeric(n_ccy)
+  ccy_e_locked <- numeric(n_ccy)
+  ccy_carry <- rep(NA_real_, n_ccy)
+  ccy_ovl <- numeric(n_ccy)
+
+  fx_exp_col <- sub_meta$FX_Exposure
+  for (k in seq_len(n_ccy)) {
+    ccy <- all_exp_buckets[k]
+    idx <- which(fx_exp_col == ccy)
+    if (length(idx) > 0L) {
+      w_sub <- w_vals[idx]
+      el_sub <- hedge_elig_vec[idx]
+      ccy_e_before[k] <- sum(w_sub, na.rm = TRUE)
+      ccy_e_hedgeable[k] <- sum(w_sub[el_sub], na.rm = TRUE)
+      ccy_e_locked[k] <- sum(w_sub[!el_sub], na.rm = TRUE)
+      ccy_ovl[k] <- sum(w_sub[is_ovl_vec[idx]], na.rm = TRUE)
+    }
+    if (ccy_is_dom[k]) {
+      ccy_carry[k] <- 0.0
+    } else if (!is.null(fx_carry) && ccy %in% names(fx_carry)) {
+      ccy_carry[k] <- as.numeric(fx_carry[[ccy]])
+    }
+  }
+
+  currency_dt <- data.table::data.table(
+    base_currency = rep(base_ccy, n_ccy),
+    fx_exposure = all_exp_buckets,
+    is_domestic = ccy_is_dom,
+    is_emeq = ccy_is_em,
+    forward_available = ccy_fwd_ok,
+    status = ccy_status,
+    exposure_before_hedge = ccy_e_before,
+    hedgeable_exposure = ccy_e_hedgeable,
+    non_hedgeable_exposure = ccy_e_locked,
+    latest_carry_pa = ccy_carry,
+    contractual_overlay_exposure = ccy_ovl
+  )
 
   has_errors <- any(vapply(issues, function(x) identical(x$severity, "ERROR"), logical(1)))
 
@@ -152,11 +162,11 @@ derive_prehedge_exposures <- function(weights,
     valid = !has_errors,
     base_currency = base_ccy,
     weight_sum = w_sum,
-    equity_share = sum(asset_dt[asset_class == "EQUITY", weight], na.rm = TRUE),
-    foreign_total_exposure = sum(asset_dt[is_domestic == FALSE, weight], na.rm = TRUE),
-    foreign_hedgeable_exposure = sum(asset_dt[hedge_eligible == TRUE, weight], na.rm = TRUE),
-    emeq_exposure = sum(asset_dt[is_emeq == TRUE, weight], na.rm = TRUE),
-    domestic_exposure = sum(asset_dt[is_domestic == TRUE, weight], na.rm = TRUE),
+    equity_share = sum(w_vals[sub_meta$Asset_Class == "EQUITY"], na.rm = TRUE),
+    foreign_total_exposure = sum(w_vals[!is_dom_vec], na.rm = TRUE),
+    foreign_hedgeable_exposure = sum(w_vals[hedge_elig_vec], na.rm = TRUE),
+    emeq_exposure = sum(w_vals[is_em_vec], na.rm = TRUE),
+    domestic_exposure = sum(w_vals[is_dom_vec], na.rm = TRUE),
     asset_exposures = asset_dt,
     currency_exposures = currency_dt,
     available_hedge_currencies = available_hedge_currencies,
@@ -336,62 +346,74 @@ resolve_hedge_notionals <- function(exposures,
     }
   }
 
-  asset_dt[, `:=`(
-    requested_h = req_h_vec,
-    applied_h = app_h_vec,
-    hedge_notional = notional_vec,
-    post_hedge_exposure = ifelse(is_domestic, weight, weight - notional_vec)
-  )]
+  data.table::set(asset_dt, j = "requested_h", value = req_h_vec)
+  data.table::set(asset_dt, j = "applied_h", value = app_h_vec)
+  data.table::set(asset_dt, j = "hedge_notional", value = notional_vec)
+  data.table::set(asset_dt, j = "post_hedge_exposure", value = ifelse(asset_dt$is_domestic, asset_dt$weight, asset_dt$weight - notional_vec))
 
   # Update currency exposure summary table:
   # E_{c,vor} = Sum_i w_i * e_{i,c}
   # g_c = Sum_i w_i * e_{i,c} * h_{i,c}
   # E_{c,nach} = E_{c,vor} - g_c
   # When hedgeable_exposure == 0 (or EMEQ / domestic), effective_hedge_ratio is NA_real_ ("n/a"), never 0/0!
-  g_by_ccy <- asset_dt[, .(
-    g_notional = sum(hedge_notional, na.rm = TRUE)
-  ), by = fx_exposure]
+  ccy_fx_vec <- ccy_dt$fx_exposure
+  asset_fx_vec <- asset_dt$fx_exposure
+  g_notional_vec <- vapply(ccy_fx_vec, function(ccy) {
+    sum(notional_vec[asset_fx_vec == ccy], na.rm = TRUE)
+  }, numeric(1))
 
-  ccy_dt <- merge(ccy_dt, g_by_ccy, by = "fx_exposure", all.x = TRUE, sort = FALSE)
-  ccy_dt[is.na(g_notional), g_notional := 0.0]
-  ccy_dt[, `:=`(
-    hedge_notional = g_notional,
-    exposure_after_hedge = exposure_before_hedge - g_notional,
-    effective_hedge_ratio = ifelse(
-      !is_domestic & !is_emeq & forward_available & hedgeable_exposure > 1e-12,
-      g_notional / hedgeable_exposure,
-      NA_real_
-    ),
-    total_fx_hedge_share = ifelse(
-      !is_domestic & !is_emeq & exposure_before_hedge > 1e-12,
-      g_notional / exposure_before_hedge,
-      NA_real_
-    )
-  )]
-  ccy_dt[, g_notional := NULL]
+  e_before_vec <- ccy_dt$exposure_before_hedge
+  e_after_vec <- e_before_vec - g_notional_vec
+  e_hedgeable_vec <- ccy_dt$hedgeable_exposure
+  not_dom_em <- (!ccy_dt$is_domestic) & (!ccy_dt$is_emeq)
+  eff_hr_vec <- ifelse(
+    not_dom_em & ccy_dt$forward_available & (e_hedgeable_vec > 1e-12),
+    g_notional_vec / e_hedgeable_vec,
+    NA_real_
+  )
+  tot_share_vec <- ifelse(
+    not_dom_em & (e_before_vec > 1e-12),
+    g_notional_vec / e_before_vec,
+    NA_real_
+  )
 
-  # Preserve original currency order
-  ccy_dt <- ccy_dt[match(exposures$currency_exposures$fx_exposure, ccy_dt$fx_exposure)]
+  data.table::set(ccy_dt, j = "hedge_notional", value = g_notional_vec)
+  data.table::set(ccy_dt, j = "exposure_after_hedge", value = e_after_vec)
+  data.table::set(ccy_dt, j = "effective_hedge_ratio", value = eff_hr_vec)
+  data.table::set(ccy_dt, j = "total_fx_hedge_share", value = tot_share_vec)
 
   # Derived read-only representations for the inactive mode
   derived_currency_ratios <- stats::setNames(
-    as.list(ifelse(is.na(ccy_dt$effective_hedge_ratio), 0.0, ccy_dt$effective_hedge_ratio)),
-    ccy_dt$fx_exposure
+    as.list(ifelse(is.na(eff_hr_vec), 0.0, eff_hr_vec)),
+    ccy_fx_vec
   )
-  derived_class_table <- asset_dt[, .(
-    total_weight = sum(weight, na.rm = TRUE),
-    hedgeable_weight = sum(ifelse(hedge_eligible, weight, 0.0), na.rm = TRUE),
-    hedge_notional = sum(hedge_notional, na.rm = TRUE),
-    effective_class_ratio = ifelse(
-      sum(ifelse(hedge_eligible, weight, 0.0), na.rm = TRUE) > 1e-12,
-      sum(hedge_notional, na.rm = TRUE) / sum(ifelse(hedge_eligible, weight, 0.0), na.rm = TRUE),
-      NA_real_
-    )
-  ), by = asset_class]
+
+  ac_vec <- asset_dt$Asset_Class %||% asset_dt$asset_class
+  uniq_ac <- unique(ac_vec)
+  w_vec_dt <- asset_dt$weight
+  elig_vec_dt <- asset_dt$hedge_eligible
+  ac_tot_w <- numeric(length(uniq_ac))
+  ac_hed_w <- numeric(length(uniq_ac))
+  ac_notional <- numeric(length(uniq_ac))
+  for (k in seq_along(uniq_ac)) {
+    idx_ac <- which(ac_vec == uniq_ac[k])
+    w_s <- w_vec_dt[idx_ac]
+    el_s <- elig_vec_dt[idx_ac]
+    ac_tot_w[k] <- sum(w_s, na.rm = TRUE)
+    ac_hed_w[k] <- sum(w_s[el_s], na.rm = TRUE)
+    ac_notional[k] <- sum(notional_vec[idx_ac], na.rm = TRUE)
+  }
+  derived_class_table <- data.table::data.table(
+    asset_class = uniq_ac,
+    total_weight = ac_tot_w,
+    hedgeable_weight = ac_hed_w,
+    hedge_notional = ac_notional,
+    effective_class_ratio = ifelse(ac_hed_w > 1e-12, ac_notional / ac_hed_w, NA_real_)
+  )
 
   # Named vector of foreign hedge notionals g_c keyed by "HEDGE_<CCY>"
-  foreign_hedges <- ccy_dt[is_domestic == FALSE & is_emeq == FALSE & forward_available == TRUE]
-  g_vec <- stats::setNames(foreign_hedges$hedge_notional, paste0("HEDGE_", foreign_hedges$fx_exposure))
+  fh_mask <- not_dom_em & ccy_dt$forward_available
+  g_vec <- stats::setNames(g_notional_vec[fh_mask], paste0("HEDGE_", ccy_fx_vec[fh_mask]))
 
   has_errors <- any(vapply(issues, function(x) identical(x$severity, "ERROR"), logical(1)))
 
@@ -405,11 +427,11 @@ resolve_hedge_notionals <- function(exposures,
       "DIRECT_ASSET_CLASS_MAPPING"
     },
     weight_sum = exposures$weight_sum,
-    total_hedge_notional = sum(ccy_dt$hedge_notional, na.rm = TRUE),
-    foreign_exposure_before = sum(ccy_dt[is_domestic == FALSE, exposure_before_hedge], na.rm = TRUE),
-    foreign_exposure_after = sum(ccy_dt[is_domestic == FALSE, exposure_after_hedge], na.rm = TRUE),
-    hedgeable_foreign_before = sum(ccy_dt[is_domestic == FALSE & is_emeq == FALSE & forward_available == TRUE, hedgeable_exposure], na.rm = TRUE),
-    hedgeable_foreign_after = sum(ccy_dt[is_domestic == FALSE & is_emeq == FALSE & forward_available == TRUE, hedgeable_exposure - hedge_notional], na.rm = TRUE),
+    total_hedge_notional = sum(g_notional_vec, na.rm = TRUE),
+    foreign_exposure_before = sum(e_before_vec[!ccy_dt$is_domestic], na.rm = TRUE),
+    foreign_exposure_after = sum(e_after_vec[!ccy_dt$is_domestic], na.rm = TRUE),
+    hedgeable_foreign_before = sum(e_hedgeable_vec[fh_mask], na.rm = TRUE),
+    hedgeable_foreign_after = sum((e_hedgeable_vec - g_notional_vec)[fh_mask], na.rm = TRUE),
     emeq_exposure = exposures$emeq_exposure,
     domestic_exposure = exposures$domestic_exposure,
     g_vector = g_vec,
