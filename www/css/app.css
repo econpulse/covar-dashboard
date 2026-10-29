@@ -886,3 +886,13 @@ html, body {
   justify-content: flex-end;
   gap: var(--space-3);
 }
+
+/* Inactive asset row styling in CMA table */
+.asset-row.is-inactive-asset {
+  background-color: rgba(241, 245, 249, 0.45);
+}
+
+.asset-row.is-inactive-asset td {
+  border-bottom-color: rgba(226, 232, 240, 0.8);
+}
+

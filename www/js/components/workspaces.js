@@ -785,6 +785,7 @@ export function renderScenariosWorkspace(store, bridge) {
     const rows = sortedScenRows.map(row => {
       const aid = row.asset_id;
       const locPct = Number((Number(row.cagr_local_5y || 0) * 100).toFixed(2));
+      const isActive = row.is_active !== false;
 
       const editInput = el('input', {
         type: 'number',
@@ -805,8 +806,19 @@ export function renderScenariosWorkspace(store, bridge) {
       });
 
       const acClass = getAssetClassClass(row.asset_class);
-      return el('tr', { className: `asset-row asset-row-${acClass}` }, [
-        el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: aid }),
+      return el('tr', {
+        className: `asset-row asset-row-${acClass} ${!isActive ? 'is-inactive-asset' : ''}`,
+        style: !isActive ? { opacity: '0.85', background: 'var(--surface-2, rgba(0,0,0,0.02))' } : {}
+      }, [
+        el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' } }, [
+          el('span', { textContent: aid }),
+          !isActive ? el('span', {
+            className: 'tag tag-domestic',
+            style: { marginLeft: '6px', fontSize: '10px', padding: '1px 5px', verticalAlign: 'middle' },
+            textContent: 'Inaktiv',
+            title: 'Dieses Asset ist im Anlageuniversum inaktiv'
+          }) : null
+        ].filter(Boolean)),
         el('td', {}, [
           el('span', { textContent: `${row.name} ` }),
           row.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class }) : null
@@ -1091,6 +1103,7 @@ export function renderDataWorkspace(store, bridge) {
             cursor: 'pointer',
             fontWeight: '600',
             borderRadius: '12px',
+            transition: 'background 0.15s ease, color 0.15s ease, opacity 0.15s ease',
             background: isActive ? 'var(--color-success-bg, #e6f4ea)' : 'var(--surface-2, #f1f3f4)',
             color: isActive ? 'var(--color-success, #137333)' : 'var(--text-muted, #70757a)',
             border: `1px solid ${isActive ? 'var(--color-success, #137333)' : 'var(--border-color, #dadce0)'}`
@@ -1099,6 +1112,15 @@ export function renderDataWorkspace(store, bridge) {
           textContent: isActive ? '✓ Aktiv' : '○ Inaktiv',
           onClick: e => {
             e.stopPropagation();
+            if (statusCell.disabled) return;
+            const nextActive = !Boolean(m.Active);
+            m.Active = nextActive;
+            statusCell.style.background = nextActive ? 'var(--color-success-bg, #e6f4ea)' : 'var(--surface-2, #f1f3f4)';
+            statusCell.style.color = nextActive ? 'var(--color-success, #137333)' : 'var(--text-muted, #70757a)';
+            statusCell.style.border = `1px solid ${nextActive ? 'var(--color-success, #137333)' : 'var(--border-color, #dadce0)'}`;
+            statusCell.textContent = (nextActive ? '✓ Aktiv' : '○ Inaktiv') + ' …';
+            statusCell.style.opacity = '0.7';
+            statusCell.disabled = true;
             if (bridge) {
               bridge.sendCommand('universe.toggle_asset', { asset_id: m.Code });
             }

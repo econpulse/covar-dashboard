@@ -78,7 +78,8 @@ derive_prehedge_exposures <- function(weights,
     is_emeq = (sub_meta$FX_Exposure == "EMEQ"),
     is_contractual_overlay = (sub_meta$Return_Structure == "FUTURES_TR"),
     meta_hedge_allowed = isTRUE(sub_meta$Hedge_Allowed) | (sub_meta$Hedge_Allowed == TRUE),
-    default_hedge_ratio = ifelse(is.na(sub_meta$Default_Hedge_Ratio), 0.0, as.numeric(sub_meta$Default_Hedge_Ratio))
+    default_hedge_ratio = ifelse(is.na(sub_meta$Default_Hedge_Ratio), 0.0, as.numeric(sub_meta$Default_Hedge_Ratio)),
+    is_active = ifelse(is.na(sub_meta$Active), TRUE, as.logical(sub_meta$Active))
   )
 
   asset_dt[, forward_available := ifelse(

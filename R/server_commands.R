@@ -848,7 +848,7 @@ handle_app_command <- function(request, state) {
       portfolio_id = state$active_portfolio_id,
       weights = state$portfolios[[state$active_portfolio_id]]$weights,
       hedge_config = state$hedge_configs[[state$hedge_mode]],
-      include_all_models_comparison = TRUE
+      include_all_models_comparison = FALSE
     )
 
     return(build_response_envelope(

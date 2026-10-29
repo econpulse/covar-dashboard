@@ -11,7 +11,8 @@ build_risk_basis <- function(u,
                              universe = NULL,
                              base_ccy = "CHF",
                              return_mode = c("TOTAL", "EXCESS"),
-                             cash_returns = NULL) {
+                             cash_returns = NULL,
+                             prebuilt_wide = NULL) {
   return_mode <- match.arg(return_mode)
   issues <- list()
 
@@ -118,23 +119,27 @@ build_risk_basis <- function(u,
   hedge_ids <- if (length(available_hedge_ccys) > 0L) paste0("HEDGE_", available_hedge_ccys) else character(0)
   component_ids <- c(asset_ids, hedge_ids)
 
-  # Build wide matrix X_B indexed by month_index
-  grid <- unique(u_dt[, .(date, month_key, month_index)])
-  data.table::setorder(grid, month_index)
+  # Build or extract wide matrix X_B indexed by month_index
+  if (!is.null(prebuilt_wide)) {
+    X_dt <- data.table::copy(prebuilt_wide)
+  } else {
+    grid <- unique(u_dt[, .(date, month_key, month_index)])
+    data.table::setorder(grid, month_index)
 
-  all_u_codes <- unique(c(asset_ids, donor_factor_ids))
-  u_all <- u_dt[Code %in% all_u_codes]
-  u_wide <- data.table::dcast(
-    u_all[, .(month_index, Code, u_base)],
-    month_index ~ Code,
-    value.var = "u_base"
-  )
-  X_dt <- merge(grid, u_wide, by = "month_index", all.x = TRUE, sort = TRUE)
+    all_u_codes <- unique(c(asset_ids, donor_factor_ids))
+    u_all <- u_dt[Code %in% all_u_codes]
+    u_wide <- data.table::dcast(
+      u_all[, .(month_index, Code, u_base)],
+      month_index ~ Code,
+      value.var = "u_base"
+    )
+    X_dt <- merge(grid, u_wide, by = "month_index", all.x = TRUE, sort = TRUE)
 
-  if (length(available_hedge_ccys) > 0L) {
-    z_sub <- z_dt[currency %in% available_hedge_ccys, .(month_index, component_id = paste0("HEDGE_", currency), z_base)]
-    z_wide <- data.table::dcast(z_sub, month_index ~ component_id, value.var = "z_base")
-    X_dt <- merge(X_dt, z_wide, by = "month_index", all.x = TRUE, sort = TRUE)
+    if (length(available_hedge_ccys) > 0L) {
+      z_sub <- z_dt[currency %in% available_hedge_ccys, .(month_index, component_id = paste0("HEDGE_", currency), z_base)]
+      z_wide <- data.table::dcast(z_sub, month_index ~ component_id, value.var = "z_base")
+      X_dt <- merge(X_dt, z_wide, by = "month_index", all.x = TRUE, sort = TRUE)
+    }
   }
 
   all_basis_ids <- unique(c(component_ids, donor_factor_ids))
@@ -148,24 +153,44 @@ build_risk_basis <- function(u,
   X_full_mat <- as.matrix(X_dt[, ..all_basis_ids])
   rownames(X_full_mat) <- X_dt$month_key
 
-  # Component metadata and availability summary
-  comp_avail_list <- lapply(component_ids, function(cid) {
-    vec <- X_mat[, cid]
-    valid_pos <- which(!is.na(vec))
+  # Fast vectorized component metadata and availability summary
+  n_comps <- length(component_ids)
+  comp_types <- ifelse(component_ids %in% hedge_ids, "FX_HEDGE", "ASSET_TR")
+  comp_ccys <- character(n_comps)
+  comp_labels <- character(n_comps)
+  obs_counts <- integer(n_comps)
+  start_months <- character(n_comps)
+  end_months <- character(n_comps)
+  month_keys <- X_dt$month_key
+
+  for (ci in seq_len(n_comps)) {
+    cid <- component_ids[ci]
     is_hedge <- cid %in% hedge_ids
     ccy <- if (is_hedge) sub("^HEDGE_", "", cid) else univ_meta[Code == cid, FX_Exposure][1L]
-    data.table::data.table(
-      component_id = cid,
-      component_type = if (is_hedge) "FX_HEDGE" else "ASSET_TR",
-      label = if (is_hedge) sprintf("FX Hedge %s -> %s (1M)", ccy, base_ccy) else univ_meta[Code == cid, Name][1L],
-      currency = ccy,
-      obs_count = length(valid_pos),
-      start_month = if (length(valid_pos) > 0L) X_dt$month_key[min(valid_pos)] else NA_character_,
-      end_month = if (length(valid_pos) > 0L) X_dt$month_key[max(valid_pos)] else NA_character_,
-      available = length(valid_pos) > 0L
-    )
-  })
-  comp_avail_dt <- data.table::rbindlist(comp_avail_list, fill = TRUE)
+    comp_ccys[ci] <- ccy %||% NA_character_
+    comp_labels[ci] <- if (is_hedge) sprintf("FX Hedge %s -> %s (1M)", ccy, base_ccy) else univ_meta[Code == cid, Name][1L]
+    vec <- X_mat[, cid]
+    valid_pos <- which(!is.na(vec))
+    obs_counts[ci] <- length(valid_pos)
+    if (length(valid_pos) > 0L) {
+      start_months[ci] <- month_keys[min(valid_pos)]
+      end_months[ci] <- month_keys[max(valid_pos)]
+    } else {
+      start_months[ci] <- NA_character_
+      end_months[ci] <- NA_character_
+    }
+  }
+
+  comp_avail_dt <- data.table::data.table(
+    component_id = component_ids,
+    component_type = comp_types,
+    label = comp_labels,
+    currency = comp_ccys,
+    obs_count = obs_counts,
+    start_month = start_months,
+    end_month = end_months,
+    available = obs_counts > 0L
+  )
 
   # Also append missing hedge currencies as unavailable entries for transparent UI/validation
   if (length(missing_hedge_ccys) > 0L) {

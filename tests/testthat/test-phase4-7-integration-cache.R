@@ -260,8 +260,17 @@ test_that("Portfolio save/delete, universe toggle, and 5Y carry overrides work r
   usd_asset_row <- st$current_scenario_eval$asset_table[fx_exposure == "USD"][1L]
   expect_equal(usd_asset_row$avg_forward_carry_pa, -0.015)
 
-  # 5. Universe toggle asset
+  # 5. Universe toggle asset and inactive assets in CMA table
   orig_len <- length(st$universe)
+  
+  # Check that initially inactive assets (SWISSMI(RI), SWSPIXD) are present in CMA asset_table
+  scen_tbl_init <- st$current_scenario_eval$asset_table
+  expect_true("SWISSMI(RI)" %in% scen_tbl_init$asset_id)
+  expect_true("SWSPIXD" %in% scen_tbl_init$asset_id)
+  swissmi_row <- scen_tbl_init[asset_id == "SWISSMI(RI)"]
+  expect_false(isTRUE(swissmi_row$is_active))
+  expect_equal(swissmi_row$weight, 0.0)
+
   resp_tog <- handle_app_command(list(
     protocol_version = 1L, request_id = "r6", type = "universe.toggle_asset",
     payload = list(asset_id = "GSGCTOT")
@@ -269,6 +278,13 @@ test_that("Portfolio save/delete, universe toggle, and 5Y carry overrides work r
   expect_equal(resp_tog$status, "ok")
   expect_false("GSGCTOT" %in% st$universe)
   expect_equal(length(st$universe), orig_len - 1L)
+
+  # GSGCTOT must still appear in the CMA scenario asset_table even though it was toggled inactive!
+  scen_tbl_after <- st$current_scenario_eval$asset_table
+  expect_true("GSGCTOT" %in% scen_tbl_after$asset_id)
+  gsgctot_row <- scen_tbl_after[asset_id == "GSGCTOT"]
+  expect_false(isTRUE(gsgctot_row$is_active))
+  expect_equal(gsgctot_row$weight, 0.0)
 
   # Toggle back
   resp_tog_back <- handle_app_command(list(
@@ -278,6 +294,8 @@ test_that("Portfolio save/delete, universe toggle, and 5Y carry overrides work r
   expect_equal(resp_tog_back$status, "ok")
   expect_true("GSGCTOT" %in% st$universe)
   expect_equal(length(st$universe), orig_len)
+  scen_tbl_restored <- st$current_scenario_eval$asset_table
+  expect_true(isTRUE(scen_tbl_restored[asset_id == "GSGCTOT"]$is_active))
 })
 
 test_that("Dynamic hedge currency detection in CMAs works across base currencies (CHF, EUR, USD, GBP)", {

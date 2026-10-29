@@ -45,9 +45,30 @@ evaluate_return_scenarios <- function(expectations,
     rebal_rule <- "ANNUAL_REBALANCED"
   }
 
+  # Ensure all assets defined in metadata (ASSET_TR) are included so that inactive assets
+  # and assets not currently held in the portfolio are fully represented and editable in the CMA list
+  meta_dt <- data.table::as.data.table(meta)
+  all_asset_codes <- meta_dt[Series_Type == "ASSET_TR", Code]
+  all_asset_codes <- order_asset_universe(all_asset_codes, meta_dt, base_ccy = base_ccy)
+
+  full_weights <- numeric(length(all_asset_codes))
+  names(full_weights) <- all_asset_codes
+  if (!is.null(weights) && length(weights) > 0L) {
+    m_w <- match(names(weights), all_asset_codes)
+    valid_m <- !is.na(m_w)
+    full_weights[m_w[valid_m]] <- as.numeric(weights)[valid_m]
+    # Retain any codes in weights that are not in all_asset_codes (e.g. invalid code tests)
+    unknown_codes <- setdiff(names(weights), all_asset_codes)
+    if (length(unknown_codes) > 0L) {
+      for (uc in unknown_codes) {
+        full_weights[uc] <- as.numeric(weights[[uc]])
+      }
+    }
+  }
+
   # Resolve exposures and hedge notionals
   exp_pre <- derive_prehedge_exposures(
-    weights = weights,
+    weights = full_weights,
     meta = meta,
     base_ccy = base_ccy,
     available_hedge_currencies = available_hedge_currencies
@@ -156,6 +177,7 @@ evaluate_return_scenarios <- function(expectations,
       return_currency = asset_dt$return_currency[i],
       fx_exposure = exp_ccy,
       is_domestic = asset_dt$is_domestic[i],
+      is_active = if (!is.null(asset_dt$is_active)) isTRUE(asset_dt$is_active[i]) else isTRUE(meta_dt[Code == aid, Active][1L]),
       forward_available = asset_dt$forward_available[i],
       hedge_eligible = asset_dt$hedge_eligible[i],
       weight = asset_dt$weight[i],

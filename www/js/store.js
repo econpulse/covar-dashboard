@@ -431,7 +431,11 @@ export class AppStore {
     }
 
     if (res.comparison) {
-      this.state.results.comparison = res.comparison;
+      this.state.results.comparison = {
+        ...(this.state.results.comparison || {}),
+        ...res.comparison,
+        cross_model_comparison: res.comparison.cross_model_comparison || this.state.results.comparison?.cross_model_comparison
+      };
       this.initComparisonSlotsIfNeeded();
     }
 
