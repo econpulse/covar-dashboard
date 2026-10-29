@@ -36,11 +36,9 @@ export function el(tag, attrs = {}, children = []) {
 
 export function clearAndAppend(container, children) {
   if (!container) return;
-  container.replaceChildren();
   const arr = Array.isArray(children) ? children : [children];
-  for (const ch of arr) {
-    if (ch instanceof Node) container.appendChild(ch);
-  }
+  const validNodes = arr.filter(ch => ch instanceof Node);
+  container.replaceChildren(...validNodes);
 }
 
 export function fmtPct(val, digits = 2, naStr = 'n/a') {
@@ -97,11 +95,11 @@ export function updateAllPortfolioKpis(store) {
 
   for (const item of kpis) {
     document.querySelectorAll(`[data-kpi="${item.dataKpi}"]`).forEach(el => {
-      el.textContent = item.val;
+      if (el.textContent !== item.val) el.textContent = item.val;
     });
     if (item.sub !== null && item.sub !== undefined) {
       document.querySelectorAll(`[data-kpi-sub="${item.dataKpi}"]`).forEach(el => {
-        el.textContent = item.sub;
+        if (el.textContent !== item.sub) el.textContent = item.sub;
       });
     }
   }
@@ -360,11 +358,34 @@ export function updateWeightFooter(st, tfootNode = document.getElementById('port
   const subText = Math.abs(wSum - 1.0) <= 1e-4 ? 'Voll investiert (Summe = 100%)' : 'Abweichung von 100%!';
 
   document.querySelectorAll('[data-kpi="port_wsum"]').forEach(el => {
-    el.textContent = wSumText;
+    if (el.textContent !== wSumText) el.textContent = wSumText;
   });
   document.querySelectorAll('[data-kpi-sub="port_wsum"]').forEach(el => {
-    el.textContent = subText;
+    if (el.textContent !== subText) el.textContent = subText;
   });
+
+  const sumFormatted = fmtPct(wSum, 2);
+  const sumColor = Math.abs(wSum - 1.0) > 1e-4 ? 'var(--status-dirty-text)' : 'var(--status-ok-text)';
+  const hedgeFormatted = fmtPct(ev?.exposures?.total_hedge_notional, 1);
+  const volFormatted = fmtPct(ev?.metrics?.vol_annualized, 2);
+
+  // In-place patch if footer tr already exists (avoids DOM recreation on every slider drag)
+  const existingTr = tfootNode.firstElementChild;
+  if (existingTr && existingTr.children.length >= 10) {
+    const tdSum = existingTr.children[4];
+    if (tdSum.textContent !== sumFormatted) tdSum.textContent = sumFormatted;
+    if (tdSum.style.color !== sumColor) tdSum.style.color = sumColor;
+
+    const tdHedge = existingTr.children[6];
+    if (tdHedge.textContent !== hedgeFormatted) tdHedge.textContent = hedgeFormatted;
+
+    const tdVol = existingTr.children[7];
+    if (tdVol.textContent !== volFormatted) tdVol.textContent = volFormatted;
+
+    const tdVol2 = existingTr.children[8];
+    if (tdVol2.textContent !== volFormatted) tdVol2.textContent = volFormatted;
+    return;
+  }
 
   const tr = el('tr', {}, [
     el('td', { className: 'sticky-col', textContent: 'SUMME' }),
@@ -373,13 +394,13 @@ export function updateWeightFooter(st, tfootNode = document.getElementById('port
     el('td', { textContent: '' }),
     el('td', {
       className: 'num',
-      style: { color: Math.abs(wSum - 1.0) > 1e-4 ? 'var(--status-dirty-text)' : 'var(--status-ok-text)' },
-      textContent: fmtPct(wSum, 2)
+      style: { color: sumColor },
+      textContent: sumFormatted
     }),
     el('td', { className: 'num', textContent: '' }),
-    el('td', { className: 'num', textContent: fmtPct(ev?.exposures?.total_hedge_notional, 1) }),
-    el('td', { className: 'num', textContent: fmtPct(ev?.metrics?.vol_annualized, 2) }),
-    el('td', { className: 'num', textContent: fmtPct(ev?.metrics?.vol_annualized, 2) }),
+    el('td', { className: 'num', textContent: hedgeFormatted }),
+    el('td', { className: 'num', textContent: volFormatted }),
+    el('td', { className: 'num', textContent: volFormatted }),
     el('td', { className: 'num', textContent: '100.0 %' })
   ]);
   clearAndAppend(tfootNode, tr);
@@ -698,69 +719,152 @@ export function renderRiskWorkspace(store) {
   const rcTbody = document.getElementById('risk_contributions_tbody');
   if (rcTbody && ev) {
     const level = st.ui_filters.risk_decomp_level || 'ASSET';
+    const isLevelMatch = rcTbody.dataset.renderedLevel === level;
+
     if (level === 'COMPONENT' && Array.isArray(ev.component_contributions)) {
-      const rows = ev.component_contributions.map(r =>
-        el('tr', {}, [
-          el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: r.component_id }),
-          el('td', { textContent: r.component_type }),
-          el('td', { className: 'num', textContent: fmtPct(r.exposure, 2) }),
-          el('td', { className: 'num', textContent: fmtPct(r.standalone_vol_ann, 2) }),
-          el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
-          el('td', {
-            className: 'num',
-            style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
-            textContent: fmtPct(r.risk_contribution_ann, 3)
-          }),
-          el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
-        ])
-      );
-      clearAndAppend(rcTbody, rows);
+      const items = ev.component_contributions;
+      let canUpdateInPlace = isLevelMatch && rcTbody.children.length === items.length;
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          if (rcTbody.children[i]?.getAttribute('data-id') !== items[i].component_id) {
+            canUpdateInPlace = false;
+            break;
+          }
+        }
+      }
+
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          const r = items[i];
+          const tr = rcTbody.children[i];
+          if (tr.children[2]) tr.children[2].textContent = fmtPct(r.exposure, 2);
+          if (tr.children[3]) tr.children[3].textContent = fmtPct(r.standalone_vol_ann, 2);
+          if (tr.children[4]) tr.children[4].textContent = fmtPct(r.marginal_risk_ann, 2);
+          if (tr.children[5]) {
+            tr.children[5].style.color = Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit';
+            tr.children[5].textContent = fmtPct(r.risk_contribution_ann, 3);
+          }
+          if (tr.children[6]) tr.children[6].textContent = fmtPct(r.pct_risk_contribution, 1);
+        }
+      } else {
+        rcTbody.dataset.renderedLevel = level;
+        const rows = items.map(r =>
+          el('tr', { 'data-id': r.component_id }, [
+            el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: r.component_id }),
+            el('td', { textContent: r.component_type }),
+            el('td', { className: 'num', textContent: fmtPct(r.exposure, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(r.standalone_vol_ann, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
+            el('td', {
+              className: 'num',
+              style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
+              textContent: fmtPct(r.risk_contribution_ann, 3)
+            }),
+            el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
+          ])
+        );
+        clearAndAppend(rcTbody, rows);
+      }
     } else if (level === 'CLASS' && Array.isArray(ev.class_contributions)) {
-      const rows = ev.class_contributions.map(r => {
-        const acClass = getAssetClassClass(r.asset_class);
-        return el('tr', { className: `asset-row asset-row-${acClass}` }, [
-          el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '700' }, textContent: r.asset_class }),
-          el('td', {}, [
-            el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }),
-            Number(r.hedge_notional || 0) > 1e-6
-              ? el('span', { className: 'tag tag-ccy', style: { marginLeft: '6px' }, textContent: `Hedge g: ${fmtPct(r.hedge_notional, 1)}` })
-              : null
-          ].filter(Boolean)),
-          el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
-          el('td', { className: 'num', textContent: fmtPct(r.standalone_vol_ann, 2) }),
-          el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
-          el('td', {
-            className: 'num',
-            style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
-            textContent: fmtPct(r.risk_contribution_ann, 3)
-          }),
-          el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
-        ]);
-      });
-      clearAndAppend(rcTbody, rows);
+      const items = ev.class_contributions;
+      let canUpdateInPlace = isLevelMatch && rcTbody.children.length === items.length;
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          if (rcTbody.children[i]?.getAttribute('data-id') !== items[i].asset_class) {
+            canUpdateInPlace = false;
+            break;
+          }
+        }
+      }
+
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          const r = items[i];
+          const tr = rcTbody.children[i];
+          if (tr.children[2]) tr.children[2].textContent = fmtPct(r.weight, 2);
+          if (tr.children[3]) tr.children[3].textContent = fmtPct(r.standalone_vol_ann, 2);
+          if (tr.children[4]) tr.children[4].textContent = fmtPct(r.marginal_risk_ann, 2);
+          if (tr.children[5]) {
+            tr.children[5].style.color = Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit';
+            tr.children[5].textContent = fmtPct(r.risk_contribution_ann, 3);
+          }
+          if (tr.children[6]) tr.children[6].textContent = fmtPct(r.pct_risk_contribution, 1);
+        }
+      } else {
+        rcTbody.dataset.renderedLevel = level;
+        const rows = items.map(r => {
+          const acClass = getAssetClassClass(r.asset_class);
+          return el('tr', { 'data-id': r.asset_class, className: `asset-row asset-row-${acClass}` }, [
+            el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '700' }, textContent: r.asset_class }),
+            el('td', {}, [
+              el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }),
+              Number(r.hedge_notional || 0) > 1e-6
+                ? el('span', { className: 'tag tag-ccy', style: { marginLeft: '6px' }, textContent: `Hedge g: ${fmtPct(r.hedge_notional, 1)}` })
+                : null
+            ].filter(Boolean)),
+            el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(r.standalone_vol_ann, 2) }),
+            el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
+            el('td', {
+              className: 'num',
+              style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
+              textContent: fmtPct(r.risk_contribution_ann, 3)
+            }),
+            el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
+          ]);
+        });
+        clearAndAppend(rcTbody, rows);
+      }
     } else if (Array.isArray(ev.asset_contributions)) {
-      const rows = ev.asset_contributions.map(r => {
-        const acClass = getAssetClassClass(r.asset_class);
-        return el('tr', { className: `asset-row asset-row-${acClass}` }, [
-          el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: r.asset_id }),
-          el('td', {}, [
-            el('span', { textContent: `${r.name} ` }),
-            r.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }) : null,
-            ' ',
-            r.fx_exposure ? el('span', { className: 'tag tag-ccy', textContent: r.fx_exposure }) : null
-          ].filter(Boolean)),
-          el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
-          el('td', { className: 'num', textContent: `${fmtPct(r.hedged_vol_ann, 2)} (unges.: ${fmtPct(r.unhedged_vol_ann, 2)})` }),
-          el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
-          el('td', {
-            className: 'num',
-            style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
-            textContent: fmtPct(r.risk_contribution_ann, 3)
-          }),
-          el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
-        ]);
-      });
-      clearAndAppend(rcTbody, rows);
+      const items = ev.asset_contributions;
+      let canUpdateInPlace = isLevelMatch && rcTbody.children.length === items.length;
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          if (rcTbody.children[i]?.getAttribute('data-id') !== items[i].asset_id) {
+            canUpdateInPlace = false;
+            break;
+          }
+        }
+      }
+
+      if (canUpdateInPlace) {
+        for (let i = 0; i < items.length; i++) {
+          const r = items[i];
+          const tr = rcTbody.children[i];
+          if (tr.children[2]) tr.children[2].textContent = fmtPct(r.weight, 2);
+          if (tr.children[3]) tr.children[3].textContent = `${fmtPct(r.hedged_vol_ann, 2)} (unges.: ${fmtPct(r.unhedged_vol_ann, 2)})`;
+          if (tr.children[4]) tr.children[4].textContent = fmtPct(r.marginal_risk_ann, 2);
+          if (tr.children[5]) {
+            tr.children[5].style.color = Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit';
+            tr.children[5].textContent = fmtPct(r.risk_contribution_ann, 3);
+          }
+          if (tr.children[6]) tr.children[6].textContent = fmtPct(r.pct_risk_contribution, 1);
+        }
+      } else {
+        rcTbody.dataset.renderedLevel = level;
+        const rows = items.map(r => {
+          const acClass = getAssetClassClass(r.asset_class);
+          return el('tr', { 'data-id': r.asset_id, className: `asset-row asset-row-${acClass}` }, [
+            el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' }, textContent: r.asset_id }),
+            el('td', {}, [
+              el('span', { textContent: `${r.name} ` }),
+              r.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }) : null,
+              ' ',
+              r.fx_exposure ? el('span', { className: 'tag tag-ccy', textContent: r.fx_exposure }) : null
+            ].filter(Boolean)),
+            el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
+            el('td', { className: 'num', textContent: `${fmtPct(r.hedged_vol_ann, 2)} (unges.: ${fmtPct(r.unhedged_vol_ann, 2)})` }),
+            el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
+            el('td', {
+              className: 'num',
+              style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
+              textContent: fmtPct(r.risk_contribution_ann, 3)
+            }),
+            el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
+          ]);
+        });
+        clearAndAppend(rcTbody, rows);
+      }
     }
   }
 
@@ -1038,58 +1142,89 @@ export function renderScenariosWorkspace(store, bridge) {
       ...rawScenRows.filter(r => r.asset_class === 'CASH'),
       ...rawScenRows.filter(r => r.asset_class !== 'CASH')
     ];
-    const rows = sortedScenRows.map(row => {
-      const aid = row.asset_id;
-      const locPct = Number((Number(row.cagr_local_5y || 0) * 100).toFixed(2));
-      const isActive = row.is_active !== false;
 
-      const editInput = el('input', {
-        type: 'number',
-        className: 'form-control num-input',
-        step: '0.1',
-        min: '-25',
-        max: '35',
-        value: locPct.toFixed(2),
-        'aria-label': `Lokale 5J-Renditeannahme p.a. für ${row.name}`,
-        onChange: e => {
-          const newRate = Number(e.target.value || 0) / 100.0;
-          bridge.sendCommand('scenarios.evaluate', {
-            scenario_id: st.active_scenario_id,
-            rebalancing_rule: st.rebalancing_rule,
-            carry_overrides: st.carry_overrides,
-            fx_spot_overrides: st.fx_spot_overrides,
-            asset_return_overrides: { [aid]: newRate }
-          });
+    let canUpdateInPlace = tbody.children.length === sortedScenRows.length;
+    if (canUpdateInPlace) {
+      for (let i = 0; i < sortedScenRows.length; i++) {
+        if (tbody.children[i]?.getAttribute('data-asset-id') !== sortedScenRows[i].asset_id) {
+          canUpdateInPlace = false;
+          break;
         }
-      });
+      }
+    }
 
-      const acClass = getAssetClassClass(row.asset_class);
-      return el('tr', {
-        className: `asset-row asset-row-${acClass} ${!isActive ? 'is-inactive-asset' : ''}`,
-        style: !isActive ? { opacity: '0.85', background: 'var(--surface-2, rgba(0,0,0,0.02))' } : {}
-      }, [
-        el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' } }, [
-          el('span', { textContent: aid }),
-          !isActive ? el('span', {
-            className: 'tag tag-domestic',
-            style: { marginLeft: '6px', fontSize: '10px', padding: '1px 5px', verticalAlign: 'middle' },
-            textContent: 'Inaktiv',
-            title: 'Dieses Asset ist im Anlageuniversum inaktiv'
-          }) : null
-        ].filter(Boolean)),
-        el('td', {}, [
-          el('span', { textContent: `${row.name} ` }),
-          row.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class }) : null
-        ].filter(Boolean)),
-        el('td', {}, el('span', { className: 'tag tag-ccy', textContent: `${row.return_currency} / ${row.fx_exposure}` })),
-        el('td', { className: 'num', textContent: fmtPct(row.weight, 1) }),
-        el('td', { className: 'num' }, [editInput, ' %']),
-        el('td', { className: 'num', textContent: fmtPct(row.cagr_unhedged_base_5y, 2) }),
-        el('td', { className: 'num', textContent: fmtPct(row.avg_forward_carry_pa, 2) }),
-        el('td', { className: 'num', style: { fontWeight: '700' }, textContent: fmtPct(row.cagr_hedged_base_5y, 2) })
-      ]);
-    });
-    clearAndAppend(tbody, rows);
+    if (canUpdateInPlace) {
+      for (let i = 0; i < sortedScenRows.length; i++) {
+        const row = sortedScenRows[i];
+        const tr = tbody.children[i];
+        const locPct = Number((Number(row.cagr_local_5y || 0) * 100).toFixed(2));
+
+        if (tr.children[3]) tr.children[3].textContent = fmtPct(row.weight, 1);
+        if (tr.children[4]) {
+          const editInput = tr.children[4].querySelector('input.num-input');
+          if (editInput && document.activeElement !== editInput) {
+            editInput.value = locPct.toFixed(2);
+          }
+        }
+        if (tr.children[5]) tr.children[5].textContent = fmtPct(row.cagr_unhedged_base_5y, 2);
+        if (tr.children[6]) tr.children[6].textContent = fmtPct(row.avg_forward_carry_pa, 2);
+        if (tr.children[7]) tr.children[7].textContent = fmtPct(row.cagr_hedged_base_5y, 2);
+      }
+    } else {
+      const rows = sortedScenRows.map(row => {
+        const aid = row.asset_id;
+        const locPct = Number((Number(row.cagr_local_5y || 0) * 100).toFixed(2));
+        const isActive = row.is_active !== false;
+
+        const editInput = el('input', {
+          type: 'number',
+          className: 'form-control num-input',
+          step: '0.1',
+          min: '-25',
+          max: '35',
+          value: locPct.toFixed(2),
+          'aria-label': `Lokale 5J-Renditeannahme p.a. für ${row.name}`,
+          onChange: e => {
+            const newRate = Number(e.target.value || 0) / 100.0;
+            bridge.sendCommand('scenarios.evaluate', {
+              scenario_id: st.active_scenario_id,
+              rebalancing_rule: st.rebalancing_rule,
+              carry_overrides: st.carry_overrides,
+              fx_spot_overrides: st.fx_spot_overrides,
+              asset_return_overrides: { [aid]: newRate }
+            });
+          }
+        });
+
+        const acClass = getAssetClassClass(row.asset_class);
+        return el('tr', {
+          'data-asset-id': aid,
+          className: `asset-row asset-row-${acClass} ${!isActive ? 'is-inactive-asset' : ''}`,
+          style: !isActive ? { opacity: '0.85', background: 'var(--surface-2, rgba(0,0,0,0.02))' } : {}
+        }, [
+          el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '600' } }, [
+            el('span', { textContent: aid }),
+            !isActive ? el('span', {
+              className: 'tag tag-domestic',
+              style: { marginLeft: '6px', fontSize: '10px', padding: '1px 5px', verticalAlign: 'middle' },
+              textContent: 'Inaktiv',
+              title: 'Dieses Asset ist im Anlageuniversum inaktiv'
+            }) : null
+          ].filter(Boolean)),
+          el('td', {}, [
+            el('span', { textContent: `${row.name} ` }),
+            row.asset_class ? el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class }) : null
+          ].filter(Boolean)),
+          el('td', {}, el('span', { className: 'tag tag-ccy', textContent: `${row.return_currency} / ${row.fx_exposure}` })),
+          el('td', { className: 'num', textContent: fmtPct(row.weight, 1) }),
+          el('td', { className: 'num' }, [editInput, ' %']),
+          el('td', { className: 'num', textContent: fmtPct(row.cagr_unhedged_base_5y, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(row.avg_forward_carry_pa, 2) }),
+          el('td', { className: 'num', style: { fontWeight: '700' }, textContent: fmtPct(row.cagr_hedged_base_5y, 2) })
+        ]);
+      });
+      clearAndAppend(tbody, rows);
+    }
   }
 }
 

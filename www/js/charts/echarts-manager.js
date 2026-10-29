@@ -1,8 +1,19 @@
 // ============================================================================
 // www/js/charts/echarts-manager.js
 // Apache ECharts instance manager with ResizeObserver, on-demand heatmap
-// rendering, and clean data-only updates (no chart recreation on updates)
+// rendering, SVG renderer (Citrix VDI optimized), and zero-animation tooltips
 // ============================================================================
+
+function citrixSafeTooltip(overrides = {}) {
+  return {
+    transitionDuration: 0,
+    confine: true,
+    renderMode: 'html',
+    enterable: false,
+    hideDelay: 40,
+    ...overrides
+  };
+}
 
 export class EChartsManager {
   constructor() {
@@ -43,7 +54,8 @@ export class EChartsManager {
     }
 
     if (!inst) {
-      inst = window.echarts.init(el, null, { renderer: 'canvas', useDirtyRect: true });
+      // Citrix VDI optimization: use SVG renderer to avoid host CPU software rasterization
+      inst = window.echarts.init(el, null, { renderer: 'svg' });
       this.instances.set(containerId, inst);
       if (this.resizeObserver) {
         this.resizeObserver.observe(el);
@@ -86,7 +98,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: citrixSafeTooltip({ trigger: 'axis', axisPointer: { type: 'shadow' } }),
       legend: { data: ['Kapitalgewicht (%)', 'Netto-Exposure nach Hedge (%)'], top: 4, textStyle: { fontSize: 11 } },
       grid: { left: 105, right: 24, top: 34, bottom: 26 },
       xAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 } },
@@ -127,7 +139,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis' },
+      tooltip: citrixSafeTooltip({ trigger: 'axis' }),
       legend: {
         data: [`Mit Hedge (${baseCcy})`, `Ungesichert (${baseCcy})`],
         top: 4,
@@ -170,7 +182,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: citrixSafeTooltip({ trigger: 'axis', axisPointer: { type: 'shadow' } }),
       legend: {
         data: ['Exposure vor Hedge (%)', 'Hedge-Nominal g (%)', 'Exposure nach Hedge (%)'],
         top: 4,
@@ -203,14 +215,14 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: {
+      tooltip: citrixSafeTooltip({
         position: 'top',
         formatter: params => {
           const xLabel = ids[params.value[0]] || '';
           const yLabel = ids[params.value[1]] || '';
           return `<b>${yLabel} × ${xLabel}</b><br/>Korrelation: ${params.value[2].toFixed(2)}`;
         }
-      },
+      }),
       grid: { left: 108, right: 56, top: 16, bottom: 78 },
       xAxis: {
         type: 'category',
@@ -263,7 +275,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: citrixSafeTooltip({ trigger: 'axis', axisPointer: { type: 'shadow' } }),
       legend: { data: ['Risikobeitrag (% p.a.)', 'Relativer Anteil (%)'], top: 4, textStyle: { fontSize: 11 } },
       grid: { left: 105, right: 24, top: 34, bottom: 26 },
       xAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 11 } },
@@ -298,7 +310,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis' },
+      tooltip: citrixSafeTooltip({ trigger: 'axis' }),
       legend: {
         data: [`Portfolio mit Hedge (${baseCcy})`, `Portfolio ungesichert (${baseCcy})`, 'Lokale Währungsbasis'],
         top: 4,
@@ -397,7 +409,7 @@ export class EChartsManager {
 
     inst.setOption({
       animation: false,
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: citrixSafeTooltip({ trigger: 'axis', axisPointer: { type: 'shadow' } }),
       legend: { data: portfolios.map(p => p.name), top: 4, textStyle: { fontSize: 11 } },
       grid: { left: 50, right: 20, top: 38, bottom: 52 },
       xAxis: { type: 'category', data: models, axisLabel: { fontSize: 10, interval: 0, rotate: 12 } },
