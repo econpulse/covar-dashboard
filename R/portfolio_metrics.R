@@ -127,6 +127,8 @@ evaluate_portfolio <- function(weights,
   class_rc_dt <- asset_rc_dt[, .(
     weight = sum(weight, na.rm = TRUE),
     hedge_notional = sum(hedge_notional, na.rm = TRUE),
+    standalone_vol_ann = ifelse(sum(weight, na.rm = TRUE) > 1e-12, sum(weight * hedged_vol_ann, na.rm = TRUE) / sum(weight, na.rm = TRUE), 0.0),
+    marginal_risk_ann = ifelse(sum(weight, na.rm = TRUE) > 1e-12, sum(risk_contribution_ann, na.rm = TRUE) / sum(weight, na.rm = TRUE), 0.0),
     risk_contribution_ann = sum(risk_contribution_ann, na.rm = TRUE),
     pct_risk_contribution = sum(pct_risk_contribution, na.rm = TRUE)
   ), by = asset_class]

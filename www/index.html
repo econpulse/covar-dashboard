@@ -417,6 +417,7 @@
                 <label for="select_risk_decomp_level" class="context-label">Zerlegung:</label>
                 <select id="select_risk_decomp_level" class="form-select">
                   <option value="ASSET" selected>Nach Asset inkl. Hedge A(h)&Sigma;A(h)'</option>
+                  <option value="CLASS">Nach Assetklasse (Aggregiert)</option>
                   <option value="COMPONENT">Nach Rohkomponente [u_i, z_c]</option>
                 </select>
               </div>
@@ -537,7 +538,7 @@
                 <button type="button" id="btn_save_cma_set" class="btn" title="Aktuelle CMA-Werte im ausgewählten Set speichern">Speichern</button>
                 <button type="button" id="btn_new_cma_set" class="btn" title="Aktuelle Werte als neues CMA-Set anlegen">Als Neu...</button>
                 <button type="button" id="btn_delete_cma_set" class="btn" style="display: none; color: var(--color-danger, #d9534f);" title="Ausgewähltes benutzerdefiniertes CMA-Set löschen">Löschen</button>
-                <label for="select_scenario_id" class="context-label">Szenario:</label>
+                <label for="select_scenario_id" class="context-label" title="Makro-Szenariovorlage (Zins- und Währungspfad)">Makro-Pfad:</label>
                 <select id="select_scenario_id" class="form-select">
                   <option value="base_5y" selected>Basisszenario (5J CMA)</option>
                   <option value="stagflation_5y">Stagflation / Zinsdruck (5J)</option>
@@ -557,6 +558,13 @@
                 <span style="font-size: var(--text-xs); color: var(--text-secondary); margin-left: var(--space-2);">Freie Vorgabe der jährlichen Absicherungskosten (überschreibt Standard-CIP)</span>
               </div>
               <div id="cma_carry_controls" style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;"></div>
+            </div>
+            <div style="padding: var(--space-3) var(--space-4); background: var(--surface-2); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3);">
+              <div>
+                <span style="font-weight: 600; font-size: var(--text-sm);">5J Erwartete FX-Kassakurs-Veränderung p.a. (&Delta;S vs. Basiswährung):</span>
+                <span style="font-size: var(--text-xs); color: var(--text-secondary); margin-left: var(--space-2);">z.&nbsp;B. -1.2% = Fremdwährung verliert 1.2% p.a. (bzw. CHF wertet um 1.2% p.a. auf)</span>
+              </div>
+              <div id="cma_fx_spot_controls" style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;"></div>
             </div>
             <div class="grid-2col" style="padding: var(--space-4);">
               <div class="table-scroll">

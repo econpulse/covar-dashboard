@@ -89,41 +89,13 @@ export function updateAllPortfolioKpis(store) {
   const eqSubText = `Fremdwährung nach Hedge: ${fmtPct(foreignAfter, 1)}`;
 
   const kpis = [
-    {
-      ids: ['kpi_port_vol', 'kpi_curr_port_vol', 'kpi_risk_port_vol', 'kpi_ret_port_vol'],
-      dataKpi: 'port_vol',
-      val: volText,
-      sub: volSubText
-    },
-    {
-      ids: ['kpi_port_unh_vol', 'kpi_curr_port_unh_vol', 'kpi_risk_port_unh_vol', 'kpi_ret_port_unh_vol'],
-      dataKpi: 'port_unh_vol',
-      val: unhVolText,
-      sub: unhVolSubText
-    },
-    {
-      ids: ['kpi_port_wsum', 'kpi_curr_port_wsum', 'kpi_risk_port_wsum', 'kpi_ret_port_wsum'],
-      dataKpi: 'port_wsum',
-      val: wSumText,
-      sub: wSumSubText
-    },
-    {
-      ids: ['kpi_port_equity', 'kpi_curr_port_equity', 'kpi_risk_port_equity', 'kpi_ret_port_equity'],
-      dataKpi: 'port_equity',
-      val: eqText,
-      sub: eqSubText
-    }
+    { dataKpi: 'port_vol', val: volText, sub: volSubText },
+    { dataKpi: 'port_unh_vol', val: unhVolText, sub: unhVolSubText },
+    { dataKpi: 'port_wsum', val: wSumText, sub: wSumSubText },
+    { dataKpi: 'port_equity', val: eqText, sub: eqSubText }
   ];
 
   for (const item of kpis) {
-    for (const id of item.ids) {
-      const el = document.getElementById(id);
-      if (el) el.textContent = item.val;
-      const subEl = document.getElementById(id + '_sub');
-      if (subEl && item.sub !== null && item.sub !== undefined) {
-        subEl.textContent = item.sub;
-      }
-    }
     document.querySelectorAll(`[data-kpi="${item.dataKpi}"]`).forEach(el => {
       el.textContent = item.val;
     });
@@ -188,7 +160,8 @@ export function renderPortfolioTriggers(store, bridge) {
   }
 
   // Fast in-place DOM update if table rows already exist (avoids destroying active sliders)
-  if (tbody.children.length === assetRows.length) {
+  const mode = st.hedge_mode || ev.exposures.active_mode || 'ASSET_CLASS';
+  if (tbody.dataset.renderedMode === mode && tbody.children.length === assetRows.length) {
     let canUpdateInPlace = true;
     for (let i = 0; i < assetRows.length; i++) {
       if (tbody.children[i].getAttribute('data-asset-id') !== assetRows[i].asset_id) {
@@ -207,7 +180,7 @@ export function renderPortfolioTriggers(store, bridge) {
         const tr = tbody.children[i];
 
         const sliderInput = tr.querySelector('input.range-slider');
-        const numInput = tr.querySelector('input.num-input');
+        const numInput = tr.querySelector('input.weight-num-input');
         if (sliderInput && document.activeElement !== sliderInput) {
           sliderInput.value = wPct.toFixed(1);
         }
@@ -216,7 +189,21 @@ export function renderPortfolioTriggers(store, bridge) {
         }
 
         if (tr.children[5]) {
-          tr.children[5].textContent = row.is_domestic ? 'Inland' : (row.is_emeq ? 'n/a' : fmtPct(row.applied_h, 0));
+          const hInput = tr.children[5].querySelector('input.hedge-override-input');
+          if (hInput) {
+            const ovrVal = st.draft_hedge_config?.asset_overrides?.[aid];
+            const hasOvr = ovrVal !== undefined && ovrVal !== null && ovrVal !== '';
+            const effH = hasOvr ? Number(ovrVal) : Number(row.applied_h || 0);
+            if (document.activeElement !== hInput) {
+              hInput.value = (effH * 100).toFixed(0);
+            }
+            hInput.style.fontWeight = hasOvr ? '700' : '500';
+            hInput.style.borderColor = hasOvr ? 'var(--accent-primary)' : '';
+          } else {
+            tr.children[5].textContent = row.is_domestic
+              ? 'Inland'
+              : (row.is_emeq ? 'n/a' : (!row.forward_available ? 'Gesperrt (0%)' : fmtPct(row.applied_h, 0)));
+          }
         }
         if (tr.children[6]) tr.children[6].textContent = fmtPct(row.hedge_notional, 1);
         if (tr.children[7]) tr.children[7].textContent = fmtPct(rc.hedged_vol_ann, 2);
@@ -228,6 +215,7 @@ export function renderPortfolioTriggers(store, bridge) {
     }
   }
 
+  tbody.dataset.renderedMode = mode;
   const trList = assetRows.map(row => {
     const aid = row.asset_id;
     const draftW = st.draft_weights[aid] !== undefined ? Number(st.draft_weights[aid]) : Number(row.weight || 0);
@@ -236,7 +224,7 @@ export function renderPortfolioTriggers(store, bridge) {
 
     const numInput = el('input', {
       type: 'number',
-      className: 'form-control num-input',
+      className: 'form-control num-input weight-num-input',
       min: '0',
       max: '100',
       step: '0.5',
@@ -260,7 +248,7 @@ export function renderPortfolioTriggers(store, bridge) {
       type: 'range',
       className: 'range-slider',
       min: '0',
-      max: '60',
+      max: '100',
       step: '0.5',
       value: wPct.toFixed(1),
       'aria-label': `Slider Gewicht ${row.name}`,
@@ -278,6 +266,72 @@ export function renderPortfolioTriggers(store, bridge) {
       }
     });
 
+    let hedgeCell;
+    const isEligibleForOverride = mode === 'ASSET_CLASS' && !row.is_domestic && !row.is_emeq && Boolean(row.forward_available);
+    if (isEligibleForOverride) {
+      const ovrVal = st.draft_hedge_config?.asset_overrides?.[aid];
+      const hasOvr = ovrVal !== undefined && ovrVal !== null && ovrVal !== '';
+      const effH = hasOvr ? Number(ovrVal) : Number(row.applied_h || 0);
+      const hInput = el('input', {
+        type: 'number',
+        className: 'form-control num-input hedge-override-input',
+        style: {
+          width: '62px',
+          fontWeight: hasOvr ? '700' : '500',
+          borderColor: hasOvr ? 'var(--accent-primary)' : ''
+        },
+        min: '0',
+        max: '100',
+        step: '5',
+        value: (effH * 100).toFixed(0),
+        title: hasOvr
+          ? `Expliziter Asset-Override aktiv (${(effH * 100).toFixed(0)}%). Doppelklick zum Zurücksetzen auf Assetklassen-Vorgabe.`
+          : 'Effektive Hedgequote aus Assetklasse (editierbar für Einzel-Asset-Override)',
+        'aria-label': `Hedgequote für ${row.name} in Prozent`,
+        onInput: e => {
+          const hVal = Math.max(0, Math.min(100, Number(e.target.value || 0))) / 100.0;
+          if (!st.draft_hedge_config || st.draft_hedge_config.mode !== 'ASSET_CLASS') {
+            st.draft_hedge_config = {
+              mode: 'ASSET_CLASS',
+              class_ratios: { ...(st.hedge_configs?.ASSET_CLASS?.class_ratios || {}) },
+              asset_overrides: { ...(st.hedge_configs?.ASSET_CLASS?.asset_overrides || {}) }
+            };
+          }
+          if (!st.draft_hedge_config.asset_overrides) st.draft_hedge_config.asset_overrides = {};
+          st.draft_hedge_config.asset_overrides[aid] = hVal;
+          hInput.style.fontWeight = '700';
+          hInput.style.borderColor = 'var(--accent-primary)';
+          bridge.sendDebounced('portfolio.evaluate', {
+            portfolio_id: st.active_portfolio_id,
+            weights: st.draft_weights,
+            hedge_config: st.draft_hedge_config,
+            cost_bps_pa: st.cost_bps_pa
+          });
+        },
+        onDblclick: () => {
+          if (st.draft_hedge_config?.asset_overrides && aid in st.draft_hedge_config.asset_overrides) {
+            delete st.draft_hedge_config.asset_overrides[aid];
+            const classH = Number(st.draft_hedge_config?.class_ratios?.[row.asset_class] ?? 0);
+            hInput.value = (classH * 100).toFixed(0);
+            hInput.style.fontWeight = '500';
+            hInput.style.borderColor = '';
+            bridge.sendDebounced('portfolio.evaluate', {
+              portfolio_id: st.active_portfolio_id,
+              weights: st.draft_weights,
+              hedge_config: st.draft_hedge_config,
+              cost_bps_pa: st.cost_bps_pa
+            });
+          }
+        }
+      });
+      hedgeCell = el('td', { className: 'num' }, [hInput, ' %']);
+    } else {
+      const hTxt = row.is_domestic
+        ? 'Inland'
+        : (row.is_emeq ? 'n/a' : (!row.forward_available ? 'Gesperrt (0%)' : fmtPct(row.applied_h, 0)));
+      hedgeCell = el('td', { className: 'num', textContent: hTxt });
+    }
+
     const acClass = getAssetClassClass(row.asset_class);
     const ccyTagClass = row.fx_exposure === 'EMEQ' ? 'tag tag-emeq' : (row.is_domestic ? 'tag tag-domestic' : 'tag tag-ccy');
 
@@ -287,7 +341,7 @@ export function renderPortfolioTriggers(store, bridge) {
       el('td', {}, el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: row.asset_class })),
       el('td', {}, el('span', { className: ccyTagClass, textContent: row.fx_exposure })),
       el('td', { className: 'num' }, [sliderInput, ' ', numInput]),
-      el('td', { className: 'num', textContent: row.is_domestic ? 'Inland' : (row.is_emeq ? 'n/a' : fmtPct(row.applied_h, 0)) }),
+      hedgeCell,
       el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 1) }),
       el('td', { className: 'num', textContent: fmtPct(rc.hedged_vol_ann, 2) }),
       el('td', { className: 'num', textContent: fmtPct(rc.risk_contribution_ann, 2) }),
@@ -305,13 +359,6 @@ export function updateWeightFooter(st, tfootNode = document.getElementById('port
   const wSumText = fmtPct(wSum, 1);
   const subText = Math.abs(wSum - 1.0) <= 1e-4 ? 'Voll investiert (Summe = 100%)' : 'Abweichung von 100%!';
 
-  const idList = ['kpi_port_wsum', 'kpi_curr_port_wsum', 'kpi_risk_port_wsum', 'kpi_ret_port_wsum'];
-  for (const id of idList) {
-    const node = document.getElementById(id);
-    if (node) node.textContent = wSumText;
-    const subNode = document.getElementById(id + '_sub');
-    if (subNode) subNode.textContent = subText;
-  }
   document.querySelectorAll('[data-kpi="port_wsum"]').forEach(el => {
     el.textContent = wSumText;
   });
@@ -363,152 +410,264 @@ export function renderCurrenciesWorkspace(store, bridge) {
   // Central Currency Exposure Table (Section 7 requirement)
   const ccyTbody = document.getElementById('currency_exposure_tbody');
   if (ccyTbody && Array.isArray(exp.currency_table)) {
-    const ccyRows = exp.currency_table.map(row => {
-      const ccy = row.fx_exposure;
-      const isDom = Boolean(row.is_domestic);
-      const isEmeq = Boolean(row.is_emeq);
-      const fwdOk = Boolean(row.forward_available);
-      const hedgeable = Number(row.hedgeable_exposure || 0);
+    const canUpdateInPlace = ccyTbody.dataset.renderedMode === mode &&
+      ccyTbody.children.length === exp.currency_table.length;
 
-      let statusBadge;
-      if (isDom) {
-        statusBadge = el('span', { className: 'tag tag-domestic', textContent: `Inland (${st.base_currency})` });
-      } else if (isEmeq) {
-        statusBadge = el('span', { className: 'tag tag-emeq', textContent: 'EMEQ (Nicht hedgefähig)' });
-      } else if (!fwdOk) {
-        statusBadge = el('span', { className: 'tag tag-locked', textContent: '1M-Forward fehlt (Gesperrt)' });
-      } else {
-        statusBadge = el('span', { className: 'tag tag-ok', textContent: '1M-Forward verfügbar' });
+    let inPlaceMatched = false;
+    if (canUpdateInPlace) {
+      let match = true;
+      for (let i = 0; i < exp.currency_table.length; i++) {
+        if (ccyTbody.children[i]?.getAttribute('data-ccy') !== exp.currency_table[i].fx_exposure) {
+          match = false;
+          break;
+        }
       }
+      if (match) {
+        inPlaceMatched = true;
+        for (let i = 0; i < exp.currency_table.length; i++) {
+          const row = exp.currency_table[i];
+          const tr = ccyTbody.children[i];
+          const ccy = row.fx_exposure;
+          const isDom = Boolean(row.is_domestic);
+          const isEmeq = Boolean(row.is_emeq);
+          const fwdOk = Boolean(row.forward_available);
+          const hedgeable = Number(row.hedgeable_exposure || 0);
 
-      let ratioCell;
-      if (mode === 'CURRENCY_OVERLAY' && !isDom && !isEmeq && fwdOk && hedgeable > 1e-6) {
-        const currVal = Number(
-          st.draft_hedge_config?.currency_ratios?.[ccy] ??
-          (row.effective_hedge_ratio !== null ? row.effective_hedge_ratio : 0)
-        );
-        const inp = el('input', {
-          type: 'number',
-          className: 'form-control num-input',
-          min: '0',
-          max: '100',
-          step: '5',
-          value: (currVal * 100).toFixed(0),
-          'aria-label': `Overlay-Hedgequote für ${ccy}`,
-          onInput: e => {
-            const hVal = Math.max(0, Math.min(100, Number(e.target.value || 0))) / 100.0;
-            if (!st.draft_hedge_config || st.draft_hedge_config.mode !== 'CURRENCY_OVERLAY') {
-              st.draft_hedge_config = { mode: 'CURRENCY_OVERLAY', currency_ratios: { ...(exp.derived_currency_ratios || {}) } };
+          if (tr.children[1]) tr.children[1].textContent = fmtPct(row.exposure_before_hedge, 2);
+          if (tr.children[2]) tr.children[2].textContent = fmtPct(row.hedgeable_exposure, 2);
+          if (tr.children[3]) tr.children[3].textContent = fmtPct(row.non_hedgeable_exposure, 2);
+
+          if (tr.children[4]) {
+            if (isDom) {
+              tr.children[4].textContent = '0.00 %';
+            } else if (!fwdOk || isEmeq || row.latest_carry_pa === null || row.latest_carry_pa === undefined || Number.isNaN(Number(row.latest_carry_pa))) {
+              tr.children[4].textContent = '-';
+            } else {
+              const carryVal = Number(row.latest_carry_pa);
+              tr.children[4].textContent = fmtPct(carryVal, 2);
+              tr.children[4].style.color = carryVal < -1e-5 ? 'var(--color-danger, #d9534f)' : (carryVal > 1e-5 ? 'var(--color-success, #28a745)' : 'inherit');
             }
-            st.draft_hedge_config.currency_ratios[ccy] = hVal;
-            if (!st.hedge_configs.CURRENCY_OVERLAY) st.hedge_configs.CURRENCY_OVERLAY = { mode: 'CURRENCY_OVERLAY', currency_ratios: {} };
-            if (!st.hedge_configs.CURRENCY_OVERLAY.currency_ratios) st.hedge_configs.CURRENCY_OVERLAY.currency_ratios = {};
-            st.hedge_configs.CURRENCY_OVERLAY.currency_ratios[ccy] = hVal;
-            bridge.sendDebounced('portfolio.evaluate', {
-              portfolio_id: st.active_portfolio_id,
-              weights: st.draft_weights,
-              hedge_config: st.draft_hedge_config,
-              cost_bps_pa: st.cost_bps_pa
-            });
           }
-        });
-        ratioCell = el('td', { className: 'num' }, [inp, ' %']);
-      } else {
-        const txt = isDom ? 'Inland (0%)' : (isEmeq || hedgeable <= 1e-9 ? 'n/a' : fmtPct(row.effective_hedge_ratio, 1));
-        ratioCell = el('td', { className: 'num', textContent: txt });
+
+          if (tr.children[5]) {
+            if (mode === 'CURRENCY_OVERLAY' && !isDom && !isEmeq && fwdOk && hedgeable > 1e-6) {
+              const inp = tr.children[5].querySelector('input.num-input');
+              const currVal = Number(
+                st.draft_hedge_config?.currency_ratios?.[ccy] ??
+                (row.effective_hedge_ratio !== null ? row.effective_hedge_ratio : 0)
+              );
+              if (inp && document.activeElement !== inp) {
+                inp.value = (currVal * 100).toFixed(0);
+              }
+            } else {
+              const txt = isDom ? 'Inland (0%)' : (isEmeq || hedgeable <= 1e-9 ? 'n/a' : fmtPct(row.effective_hedge_ratio, 1));
+              tr.children[5].textContent = txt;
+            }
+          }
+
+          if (tr.children[6]) tr.children[6].textContent = fmtPct(row.hedge_notional, 2);
+          if (tr.children[7]) tr.children[7].textContent = fmtPct(row.exposure_after_hedge, 2);
+        }
       }
+    }
 
-      const overlayNote = Number(row.contractual_overlay_exposure || 0) > 0
-        ? el('span', { className: 'tag tag-overlay', style: { marginLeft: '6px' }, textContent: `inkl. ${fmtPct(row.contractual_overlay_exposure, 1)} Futures-Nominal` })
-        : null;
+    if (!inPlaceMatched) {
+      ccyTbody.dataset.renderedMode = mode;
+      const ccyRows = exp.currency_table.map(row => {
+        const ccy = row.fx_exposure;
+        const isDom = Boolean(row.is_domestic);
+        const isEmeq = Boolean(row.is_emeq);
+        const fwdOk = Boolean(row.forward_available);
+        const hedgeable = Number(row.hedgeable_exposure || 0);
 
-      let carryCell;
-      if (isDom) {
-        carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '0.00 %' });
-      } else if (!fwdOk || isEmeq || row.latest_carry_pa === null || row.latest_carry_pa === undefined || Number.isNaN(Number(row.latest_carry_pa))) {
-        carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '-' });
-      } else {
-        const carryVal = Number(row.latest_carry_pa);
-        const carryFormatted = fmtPct(carryVal, 2);
-        const carryColor = carryVal < -1e-5 ? 'var(--color-danger, #d9534f)' : (carryVal > 1e-5 ? 'var(--color-success, #28a745)' : 'inherit');
-        carryCell = el('td', { className: 'num', style: { fontWeight: '600', color: carryColor }, textContent: carryFormatted });
-      }
+        let statusBadge;
+        if (isDom) {
+          statusBadge = el('span', { className: 'tag tag-domestic', textContent: `Inland (${st.base_currency})` });
+        } else if (isEmeq) {
+          statusBadge = el('span', { className: 'tag tag-emeq', textContent: 'EMEQ (Nicht hedgefähig)' });
+        } else if (!fwdOk) {
+          statusBadge = el('span', { className: 'tag tag-locked', textContent: '1M-Forward fehlt (Gesperrt)' });
+        } else {
+          statusBadge = el('span', { className: 'tag tag-ok', textContent: '1M-Forward verfügbar' });
+        }
 
-      return el('tr', {}, [
-        el('td', { className: 'sticky-col', style: { fontWeight: '700', fontFamily: 'var(--font-mono)' } }, [ccy, overlayNote]),
-        el('td', { className: 'num', textContent: fmtPct(row.exposure_before_hedge, 2) }),
-        el('td', { className: 'num', textContent: fmtPct(row.hedgeable_exposure, 2) }),
-        el('td', { className: 'num', textContent: fmtPct(row.non_hedgeable_exposure, 2) }),
-        carryCell,
-        ratioCell,
-        el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 2) }),
-        el('td', { className: 'num', style: { fontWeight: '600' }, textContent: fmtPct(row.exposure_after_hedge, 2) }),
-        el('td', {}, statusBadge)
-      ]);
-    });
-    clearAndAppend(ccyTbody, ccyRows);
+        let ratioCell;
+        if (mode === 'CURRENCY_OVERLAY' && !isDom && !isEmeq && fwdOk && hedgeable > 1e-6) {
+          const currVal = Number(
+            st.draft_hedge_config?.currency_ratios?.[ccy] ??
+            (row.effective_hedge_ratio !== null ? row.effective_hedge_ratio : 0)
+          );
+          const inp = el('input', {
+            type: 'number',
+            className: 'form-control num-input',
+            min: '0',
+            max: '100',
+            step: '5',
+            value: (currVal * 100).toFixed(0),
+            'aria-label': `Overlay-Hedgequote für ${ccy}`,
+            'data-ccy': ccy,
+            onInput: e => {
+              const hVal = Math.max(0, Math.min(100, Number(e.target.value || 0))) / 100.0;
+              if (!st.draft_hedge_config || st.draft_hedge_config.mode !== 'CURRENCY_OVERLAY') {
+                st.draft_hedge_config = { mode: 'CURRENCY_OVERLAY', currency_ratios: { ...(exp.derived_currency_ratios || {}) } };
+              }
+              st.draft_hedge_config.currency_ratios[ccy] = hVal;
+              if (!st.hedge_configs.CURRENCY_OVERLAY) st.hedge_configs.CURRENCY_OVERLAY = { mode: 'CURRENCY_OVERLAY', currency_ratios: {} };
+              if (!st.hedge_configs.CURRENCY_OVERLAY.currency_ratios) st.hedge_configs.CURRENCY_OVERLAY.currency_ratios = {};
+              st.hedge_configs.CURRENCY_OVERLAY.currency_ratios[ccy] = hVal;
+              bridge.sendDebounced('portfolio.evaluate', {
+                portfolio_id: st.active_portfolio_id,
+                weights: st.draft_weights,
+                hedge_config: st.draft_hedge_config,
+                cost_bps_pa: st.cost_bps_pa
+              });
+            }
+          });
+          ratioCell = el('td', { className: 'num' }, [inp, ' %']);
+        } else {
+          const txt = isDom ? 'Inland (0%)' : (isEmeq || hedgeable <= 1e-9 ? 'n/a' : fmtPct(row.effective_hedge_ratio, 1));
+          ratioCell = el('td', { className: 'num', textContent: txt });
+        }
+
+        const overlayNote = Number(row.contractual_overlay_exposure || 0) > 0
+          ? el('span', { className: 'tag tag-overlay', style: { marginLeft: '6px' }, textContent: `inkl. ${fmtPct(row.contractual_overlay_exposure, 1)} Futures-Nominal` })
+          : null;
+
+        let carryCell;
+        if (isDom) {
+          carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '0.00 %' });
+        } else if (!fwdOk || isEmeq || row.latest_carry_pa === null || row.latest_carry_pa === undefined || Number.isNaN(Number(row.latest_carry_pa))) {
+          carryCell = el('td', { className: 'num', style: { color: 'var(--text-muted)' }, textContent: '-' });
+        } else {
+          const carryVal = Number(row.latest_carry_pa);
+          const carryFormatted = fmtPct(carryVal, 2);
+          const carryColor = carryVal < -1e-5 ? 'var(--color-danger, #d9534f)' : (carryVal > 1e-5 ? 'var(--color-success, #28a745)' : 'inherit');
+          carryCell = el('td', { className: 'num', style: { fontWeight: '600', color: carryColor }, textContent: carryFormatted });
+        }
+
+        return el('tr', { 'data-ccy': ccy }, [
+          el('td', { className: 'sticky-col', style: { fontWeight: '700', fontFamily: 'var(--font-mono)' } }, [ccy, overlayNote]),
+          el('td', { className: 'num', textContent: fmtPct(row.exposure_before_hedge, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(row.hedgeable_exposure, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(row.non_hedgeable_exposure, 2) }),
+          carryCell,
+          ratioCell,
+          el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 2) }),
+          el('td', { className: 'num', style: { fontWeight: '600' }, textContent: fmtPct(row.exposure_after_hedge, 2) }),
+          el('td', {}, statusBadge)
+        ]);
+      });
+      clearAndAppend(ccyTbody, ccyRows);
+    }
   }
 
   // Asset-Class Hedge Controls Table
   const classTbody = document.getElementById('asset_class_hedge_tbody');
   if (classTbody && Array.isArray(exp.derived_class_table)) {
-    const classRows = exp.derived_class_table.map(row => {
-      const ac = row.asset_class;
-      const hWeight = Number(row.hedgeable_weight || 0);
-      let controlCell;
+    const canUpdateClassInPlace = classTbody.dataset.renderedMode === mode &&
+      classTbody.children.length === exp.derived_class_table.length;
 
-      if (mode === 'ASSET_CLASS') {
-        const currRatio = Number(
-          st.draft_hedge_config?.class_ratios?.[ac] ??
-          st.hedge_configs?.ASSET_CLASS?.class_ratios?.[ac] ?? 0
-        );
-        const inp = el('input', {
-          type: 'number',
-          className: 'form-control num-input',
-          min: '0',
-          max: '100',
-          step: '5',
-          value: (currRatio * 100).toFixed(0),
-          'aria-label': `Klassen-Hedgequote für ${ac}`,
-          onInput: e => {
-            const hVal = Math.max(0, Math.min(100, Number(e.target.value || 0))) / 100.0;
-            if (!st.draft_hedge_config || st.draft_hedge_config.mode !== 'ASSET_CLASS') {
-              st.draft_hedge_config = {
-                mode: 'ASSET_CLASS',
-                class_ratios: { ...(st.hedge_configs?.ASSET_CLASS?.class_ratios || {}) },
-                asset_overrides: { ...(st.hedge_configs?.ASSET_CLASS?.asset_overrides || {}) }
-              };
-            }
-            st.draft_hedge_config.class_ratios[ac] = hVal;
-            if (!st.hedge_configs.ASSET_CLASS) st.hedge_configs.ASSET_CLASS = { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} };
-            if (!st.hedge_configs.ASSET_CLASS.class_ratios) st.hedge_configs.ASSET_CLASS.class_ratios = {};
-            st.hedge_configs.ASSET_CLASS.class_ratios[ac] = hVal;
-            bridge.sendDebounced('portfolio.evaluate', {
-              portfolio_id: st.active_portfolio_id,
-              weights: st.draft_weights,
-              hedge_config: st.draft_hedge_config,
-              cost_bps_pa: st.cost_bps_pa
-            });
-          }
-        });
-        controlCell = el('td', { className: 'num' }, [inp, ' %']);
-      } else {
-        controlCell = el('td', {
-          className: 'num',
-          textContent: hWeight > 1e-9 ? `${fmtPct(row.effective_class_ratio, 1)} (abgeleitet)` : 'n/a'
-        });
+    let classInPlaceMatched = false;
+    if (canUpdateClassInPlace) {
+      let match = true;
+      for (let i = 0; i < exp.derived_class_table.length; i++) {
+        if (classTbody.children[i]?.getAttribute('data-ac') !== exp.derived_class_table[i].asset_class) {
+          match = false;
+          break;
+        }
       }
+      if (match) {
+        classInPlaceMatched = true;
+        for (let i = 0; i < exp.derived_class_table.length; i++) {
+          const row = exp.derived_class_table[i];
+          const tr = classTbody.children[i];
+          const ac = row.asset_class;
+          const hWeight = Number(row.hedgeable_weight || 0);
 
-      const acClass = getAssetClassClass(ac);
-      return el('tr', { className: `asset-row asset-row-${acClass}` }, [
-        el('td', { className: 'sticky-col' }, el('span', { className: `tag tag-asset tag-asset-${acClass}`, style: { fontWeight: '700' }, textContent: ac })),
-        el('td', { className: 'num', textContent: fmtPct(row.total_weight, 2) }),
-        el('td', { className: 'num', textContent: fmtPct(row.hedgeable_weight, 2) }),
-        controlCell,
-        el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 2) })
-      ]);
-    });
-    clearAndAppend(classTbody, classRows);
+          if (tr.children[1]) tr.children[1].textContent = fmtPct(row.total_weight, 2);
+          if (tr.children[2]) tr.children[2].textContent = fmtPct(row.hedgeable_weight, 2);
+
+          if (tr.children[3]) {
+            if (mode === 'ASSET_CLASS') {
+              const inp = tr.children[3].querySelector('input.num-input');
+              const currRatio = Number(
+                st.draft_hedge_config?.class_ratios?.[ac] ??
+                st.hedge_configs?.ASSET_CLASS?.class_ratios?.[ac] ?? 0
+              );
+              if (inp && document.activeElement !== inp) {
+                inp.value = (currRatio * 100).toFixed(0);
+              }
+            } else {
+              tr.children[3].textContent = hWeight > 1e-9 ? `${fmtPct(row.effective_class_ratio, 1)} (abgeleitet)` : 'n/a';
+            }
+          }
+
+          if (tr.children[4]) tr.children[4].textContent = fmtPct(row.hedge_notional, 2);
+        }
+      }
+    }
+
+    if (!classInPlaceMatched) {
+      classTbody.dataset.renderedMode = mode;
+      const classRows = exp.derived_class_table.map(row => {
+        const ac = row.asset_class;
+        const hWeight = Number(row.hedgeable_weight || 0);
+        let controlCell;
+
+        if (mode === 'ASSET_CLASS') {
+          const currRatio = Number(
+            st.draft_hedge_config?.class_ratios?.[ac] ??
+            st.hedge_configs?.ASSET_CLASS?.class_ratios?.[ac] ?? 0
+          );
+          const inp = el('input', {
+            type: 'number',
+            className: 'form-control num-input',
+            min: '0',
+            max: '100',
+            step: '5',
+            value: (currRatio * 100).toFixed(0),
+            'aria-label': `Klassen-Hedgequote für ${ac}`,
+            'data-ac': ac,
+            onInput: e => {
+              const hVal = Math.max(0, Math.min(100, Number(e.target.value || 0))) / 100.0;
+              if (!st.draft_hedge_config || st.draft_hedge_config.mode !== 'ASSET_CLASS') {
+                st.draft_hedge_config = {
+                  mode: 'ASSET_CLASS',
+                  class_ratios: { ...(st.hedge_configs?.ASSET_CLASS?.class_ratios || {}) },
+                  asset_overrides: { ...(st.hedge_configs?.ASSET_CLASS?.asset_overrides || {}) }
+                };
+              }
+              st.draft_hedge_config.class_ratios[ac] = hVal;
+              if (!st.hedge_configs.ASSET_CLASS) st.hedge_configs.ASSET_CLASS = { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} };
+              if (!st.hedge_configs.ASSET_CLASS.class_ratios) st.hedge_configs.ASSET_CLASS.class_ratios = {};
+              st.hedge_configs.ASSET_CLASS.class_ratios[ac] = hVal;
+              bridge.sendDebounced('portfolio.evaluate', {
+                portfolio_id: st.active_portfolio_id,
+                weights: st.draft_weights,
+                hedge_config: st.draft_hedge_config,
+                cost_bps_pa: st.cost_bps_pa
+              });
+            }
+          });
+          controlCell = el('td', { className: 'num' }, [inp, ' %']);
+        } else {
+          controlCell = el('td', {
+            className: 'num',
+            textContent: hWeight > 1e-9 ? `${fmtPct(row.effective_class_ratio, 1)} (abgeleitet)` : 'n/a'
+          });
+        }
+
+        const acClass = getAssetClassClass(ac);
+        return el('tr', { className: `asset-row asset-row-${acClass}`, 'data-ac': ac }, [
+          el('td', { className: 'sticky-col' }, el('span', { className: `tag tag-asset tag-asset-${acClass}`, style: { fontWeight: '700' }, textContent: ac })),
+          el('td', { className: 'num', textContent: fmtPct(row.total_weight, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(row.hedgeable_weight, 2) }),
+          controlCell,
+          el('td', { className: 'num', textContent: fmtPct(row.hedge_notional, 2) })
+        ]);
+      });
+      clearAndAppend(classTbody, classRows);
+    }
   }
 }
 
@@ -555,6 +714,29 @@ export function renderRiskWorkspace(store) {
           el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
         ])
       );
+      clearAndAppend(rcTbody, rows);
+    } else if (level === 'CLASS' && Array.isArray(ev.class_contributions)) {
+      const rows = ev.class_contributions.map(r => {
+        const acClass = getAssetClassClass(r.asset_class);
+        return el('tr', { className: `asset-row asset-row-${acClass}` }, [
+          el('td', { className: 'sticky-col', style: { fontFamily: 'var(--font-mono)', fontWeight: '700' }, textContent: r.asset_class }),
+          el('td', {}, [
+            el('span', { className: `tag tag-asset tag-asset-${acClass}`, textContent: r.asset_class }),
+            Number(r.hedge_notional || 0) > 1e-6
+              ? el('span', { className: 'tag tag-ccy', style: { marginLeft: '6px' }, textContent: `Hedge g: ${fmtPct(r.hedge_notional, 1)}` })
+              : null
+          ].filter(Boolean)),
+          el('td', { className: 'num', textContent: fmtPct(r.weight, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(r.standalone_vol_ann, 2) }),
+          el('td', { className: 'num', textContent: fmtPct(r.marginal_risk_ann, 2) }),
+          el('td', {
+            className: 'num',
+            style: { color: Number(r.risk_contribution_ann) < 0 ? 'var(--accent-secondary)' : 'inherit', fontWeight: '600' },
+            textContent: fmtPct(r.risk_contribution_ann, 3)
+          }),
+          el('td', { className: 'num', textContent: fmtPct(r.pct_risk_contribution, 1) })
+        ]);
+      });
       clearAndAppend(rcTbody, rows);
     } else if (Array.isArray(ev.asset_contributions)) {
       const rows = ev.asset_contributions.map(r => {
@@ -621,6 +803,78 @@ export function renderRiskWorkspace(store) {
 // ----------------------------------------------------------------------------
 // 4. Forward-Looking 5Y Return Scenarios Workspace
 // ----------------------------------------------------------------------------
+function resolveScenarioCurrencySummary(scEval, baseCurrency) {
+  if (Array.isArray(scEval.hedge_currency_summary) && scEval.hedge_currency_summary.length > 0) {
+    return scEval.hedge_currency_summary.filter(item => item.currency !== baseCurrency);
+  }
+  const avail = Array.isArray(scEval.available_hedge_currencies) && scEval.available_hedge_currencies.length > 0
+    ? scEval.available_hedge_currencies
+    : ['CHF', 'EUR', 'USD', 'GBP'].filter(c => c !== baseCurrency);
+
+  return avail.filter(c => c !== baseCurrency).map(c => {
+    const match = Array.isArray(scEval.asset_table) ? scEval.asset_table.find(r => r.fx_exposure === c) : null;
+    return {
+      currency: c,
+      is_needed: Boolean(match && !match.is_domestic && match.hedge_eligible && Number(match.weight || 0) > 0.0005),
+      portfolio_exposure: match ? Number(match.weight || 0) : 0,
+      avg_spot_return_pa: match ? Number(match.avg_spot_return_pa || 0) : 0,
+      avg_forward_carry_pa: match ? Number(match.avg_forward_carry_pa || 0) : 0
+    };
+  });
+}
+
+function buildCurrencyOverridePills({ fwdItems, overridesMap, defaultField, ariaLabelPrefix, onChangeValue }) {
+  return fwdItems.map(item => {
+    const ccy = item.currency;
+    const hasOvr = Boolean(overridesMap && typeof overridesMap[ccy] !== 'undefined');
+    const currentVal = hasOvr ? Number(overridesMap[ccy]) : Number(item[defaultField] || 0);
+    const valPct = (currentVal * 100).toFixed(2);
+    const isNeeded = Boolean(item.is_needed);
+    const portExp = item.portfolio_exposure != null ? Number(item.portfolio_exposure) : 0;
+    const expText = portExp > 0.0005 ? ` (${(portExp * 100).toFixed(0)}%)` : '';
+
+    const inp = el('input', {
+      type: 'number',
+      className: 'form-control num-input',
+      style: {
+        width: '75px',
+        fontWeight: hasOvr ? '700' : '500',
+        borderColor: hasOvr ? 'var(--color-primary, #1a73e8)' : ''
+      },
+      step: '0.1',
+      min: '-20',
+      max: '20',
+      value: valPct,
+      'aria-label': `${ariaLabelPrefix} für ${ccy}`,
+      onChange: e => {
+        const val = Number(e.target.value || 0) / 100.0;
+        onChangeValue(ccy, val);
+      }
+    });
+
+    return el('div', {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        fontSize: 'var(--text-xs)',
+        padding: '2px 6px',
+        borderRadius: 'var(--radius-sm)',
+        background: isNeeded ? 'rgba(26, 115, 232, 0.07)' : 'transparent',
+        border: isNeeded ? '1px solid var(--border-color)' : '1px dashed var(--border-color)'
+      },
+      title: isNeeded ? `Währung im Portfolio aktiv${expText}` : 'Währung aktuell nicht im Portfolio gehalten'
+    }, [
+      el('strong', {
+        style: { color: isNeeded ? 'var(--text-primary)' : 'var(--text-secondary)' },
+        textContent: `${ccy}${expText}: `
+      }),
+      inp,
+      el('span', { textContent: '% p.a.' })
+    ]);
+  });
+}
+
 export function renderScenariosWorkspace(store, bridge) {
   updateAllPortfolioKpis(store);
   const st = store.state;
@@ -635,7 +889,7 @@ export function renderScenariosWorkspace(store, bridge) {
   setTxt('scen_kpi_cagr_hedged', fmtPct(scEval.metrics?.scenario_cagr_hedged_5y, 2));
   setTxt('scen_kpi_cagr_unhedged', fmtPct(scEval.metrics?.scenario_cagr_unhedged_5y, 2));
   setTxt('scen_kpi_cagr_local', fmtPct(scEval.metrics?.scenario_cagr_local_5y, 2));
-  setTxt('scen_hedge_effect_pa', fmtPct(scEval.metrics?.scenario_hedge_effect_pa, 2));
+  setTxt('scen_kpi_hedge_effect', fmtPct(scEval.metrics?.scenario_hedge_effect_pa, 2));
   setTxt('scen_uncertainty_note', scEval.uncertainty_description || '');
 
   // Synchronize CMA Sets dropdown and delete button
@@ -669,92 +923,30 @@ export function renderScenariosWorkspace(store, bridge) {
     }
   }
 
-  // 5Y Forward-Carry overrides controls (dynamically detected for base currency)
+  const fwdItems = resolveScenarioCurrencySummary(scEval, st.base_currency);
+
+  // 5Y Forward-Carry overrides controls
   const carryControls = document.getElementById('cma_carry_controls');
-  if (carryControls && scEval) {
-    let summaryList = Array.isArray(scEval.hedge_currency_summary) && scEval.hedge_currency_summary.length > 0
-      ? scEval.hedge_currency_summary
-      : null;
-
-    if (!summaryList) {
-      // Fallback: derive from available_hedge_currencies and asset_table
-      const avail = Array.isArray(scEval.available_hedge_currencies) && scEval.available_hedge_currencies.length > 0
-        ? scEval.available_hedge_currencies
-        : ['CHF', 'EUR', 'USD', 'GBP'].filter(c => c !== st.base_currency);
-
-      summaryList = avail.map(c => {
-        const match = Array.isArray(scEval.asset_table) ? scEval.asset_table.find(r => r.fx_exposure === c) : null;
-        return {
-          currency: c,
-          is_needed: Boolean(match && !match.is_domestic && match.hedge_eligible && Number(match.weight || 0) > 0.0005),
-          portfolio_exposure: match ? Number(match.weight || 0) : 0,
-          avg_forward_carry_pa: match ? Number(match.avg_forward_carry_pa || 0) : 0
-        };
-      });
-    }
-
-    // Exclude domestic currency: base currency is never hedged!
-    const fwdItems = summaryList.filter(item => item.currency !== st.base_currency);
-    const nodes = [];
-
-    for (const item of fwdItems) {
-      const ccy = item.currency;
-      const hasOvr = Boolean(st.carry_overrides && typeof st.carry_overrides[ccy] !== 'undefined');
-      const currentVal = hasOvr ? Number(st.carry_overrides[ccy]) : Number(item.avg_forward_carry_pa || 0);
-      const valPct = (currentVal * 100).toFixed(2);
-      const isNeeded = Boolean(item.is_needed);
-      const portExp = item.portfolio_exposure != null ? Number(item.portfolio_exposure) : 0;
-      const expText = portExp > 0.0005 ? ` (${(portExp * 100).toFixed(0)}%)` : '';
-
-      const inp = el('input', {
-        type: 'number',
-        className: 'form-control num-input',
-        style: {
-          width: '75px',
-          fontWeight: hasOvr ? '700' : '500',
-          borderColor: hasOvr ? 'var(--color-primary, #1a73e8)' : ''
-        },
-        step: '0.1',
-        min: '-20',
-        max: '20',
-        value: valPct,
-        'aria-label': `5J Carry Annahme p.a. für ${ccy}`,
-        onChange: e => {
-          const val = Number(e.target.value || 0) / 100.0;
-          if (!st.carry_overrides) st.carry_overrides = {};
-          st.carry_overrides[ccy] = val;
-          bridge.sendCommand('scenarios.evaluate', {
-            scenario_id: st.active_scenario_id,
-            rebalancing_rule: st.rebalancing_rule,
-            carry_overrides: st.carry_overrides
-          });
-        }
-      });
-
-      nodes.push(el('div', {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: '4px',
-          fontSize: 'var(--text-xs)',
-          padding: '2px 6px',
-          borderRadius: 'var(--radius-sm)',
-          background: isNeeded ? 'rgba(26, 115, 232, 0.07)' : 'transparent',
-          border: isNeeded ? '1px solid var(--border-color)' : '1px dashed var(--border-color)'
-        },
-        title: isNeeded ? `Währung im Portfolio aktiv${expText}` : 'Währung aktuell nicht im Portfolio gehalten'
-      }, [
-        el('strong', {
-          style: { color: isNeeded ? 'var(--text-primary)' : 'var(--text-secondary)' },
-          textContent: `${ccy}${expText}: `
-        }),
-        inp,
-        el('span', { textContent: '% p.a.' })
-      ]));
-    }
+  if (carryControls) {
+    const nodes = buildCurrencyOverridePills({
+      fwdItems,
+      overridesMap: st.carry_overrides,
+      defaultField: 'avg_forward_carry_pa',
+      ariaLabelPrefix: '5J Carry Annahme p.a.',
+      onChangeValue: (ccy, val) => {
+        if (!st.carry_overrides) st.carry_overrides = {};
+        st.carry_overrides[ccy] = val;
+        bridge.sendCommand('scenarios.evaluate', {
+          scenario_id: st.active_scenario_id,
+          rebalancing_rule: st.rebalancing_rule,
+          carry_overrides: st.carry_overrides,
+          fx_spot_overrides: st.fx_spot_overrides
+        });
+      }
+    });
 
     if (st.carry_overrides && Object.keys(st.carry_overrides).length > 0) {
-      const btnReset = el('button', {
+      nodes.push(el('button', {
         type: 'button',
         className: 'btn btn-sm',
         style: { fontSize: '11px', padding: '2px 8px' },
@@ -765,14 +957,78 @@ export function renderScenariosWorkspace(store, bridge) {
           bridge.sendCommand('scenarios.evaluate', {
             scenario_id: st.active_scenario_id,
             rebalancing_rule: st.rebalancing_rule,
-            carry_overrides: {}
+            carry_overrides: {},
+            fx_spot_overrides: st.fx_spot_overrides
           });
         }
-      });
-      nodes.push(btnReset);
+      }));
     }
-
     clearAndAppend(carryControls, nodes);
+  }
+
+  // 5Y Expected Currency Spot Return overrides
+  const spotControls = document.getElementById('cma_fx_spot_controls');
+  if (spotControls) {
+    const spotNodes = buildCurrencyOverridePills({
+      fwdItems,
+      overridesMap: st.fx_spot_overrides,
+      defaultField: 'avg_spot_return_pa',
+      ariaLabelPrefix: '5J Erwartete FX-Kassakurs-Veränderung p.a.',
+      onChangeValue: (ccy, val) => {
+        if (!st.fx_spot_overrides) st.fx_spot_overrides = {};
+        st.fx_spot_overrides[ccy] = val;
+        bridge.sendCommand('scenarios.evaluate', {
+          scenario_id: st.active_scenario_id,
+          rebalancing_rule: st.rebalancing_rule,
+          carry_overrides: st.carry_overrides,
+          fx_spot_overrides: st.fx_spot_overrides
+        });
+      }
+    });
+
+    spotNodes.push(el('button', {
+      type: 'button',
+      className: 'btn btn-sm',
+      style: { fontSize: '11px', padding: '2px 8px' },
+      textContent: 'UIP (Zinsparität)',
+      title: 'Erwartete FX-Rendite gleich Zinsdifferenz (Carry) setzen (UIP-Gleichgewicht)',
+      onClick: () => {
+        if (!st.fx_spot_overrides) st.fx_spot_overrides = {};
+        for (const item of fwdItems) {
+          const ccy = item.currency;
+          const carry = st.carry_overrides && typeof st.carry_overrides[ccy] !== 'undefined'
+            ? Number(st.carry_overrides[ccy])
+            : Number(item.avg_forward_carry_pa || 0);
+          st.fx_spot_overrides[ccy] = carry;
+        }
+        bridge.sendCommand('scenarios.evaluate', {
+          scenario_id: st.active_scenario_id,
+          rebalancing_rule: st.rebalancing_rule,
+          carry_overrides: st.carry_overrides,
+          fx_spot_overrides: st.fx_spot_overrides
+        });
+      }
+    }));
+
+    if (st.fx_spot_overrides && Object.keys(st.fx_spot_overrides).length > 0) {
+      spotNodes.push(el('button', {
+        type: 'button',
+        className: 'btn btn-sm',
+        style: { fontSize: '11px', padding: '2px 8px' },
+        textContent: 'Reset Modellpfad',
+        title: 'Manuelle FX-Spot-Overrides zurücksetzen auf Szenario-Standardpfad',
+        onClick: () => {
+          st.fx_spot_overrides = {};
+          bridge.sendCommand('scenarios.evaluate', {
+            scenario_id: st.active_scenario_id,
+            rebalancing_rule: st.rebalancing_rule,
+            carry_overrides: st.carry_overrides,
+            fx_spot_overrides: {}
+          });
+        }
+      }));
+    }
+    clearAndAppend(spotControls, spotNodes);
   }
 
   const tbody = document.getElementById('scenario_assets_tbody');
@@ -800,6 +1056,8 @@ export function renderScenariosWorkspace(store, bridge) {
           bridge.sendCommand('scenarios.evaluate', {
             scenario_id: st.active_scenario_id,
             rebalancing_rule: st.rebalancing_rule,
+            carry_overrides: st.carry_overrides,
+            fx_spot_overrides: st.fx_spot_overrides,
             asset_return_overrides: { [aid]: newRate }
           });
         }

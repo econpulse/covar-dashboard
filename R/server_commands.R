@@ -357,14 +357,27 @@ run_full_evaluation_pipeline <- function(state,
     ))
   }
 
-  hist_path <- build_historical_portfolio_path(
-    basis = basis,
-    weights = port_eval$weights,
-    g_vector = port_eval$g_vector,
-    cost_bps_pa = state$cost_bps_pa,
-    start_month = model$start_month,
-    end_month = model$end_month
+  hist_res <- cache$get_or_compute(
+    tier = "historical_path",
+    key_parts = list(
+      basis_id = basis$basis_id,
+      a_vector = round(port_eval$a_vector, 10),
+      cost_bps_pa = state$cost_bps_pa,
+      start_month = model$start_month,
+      end_month = model$end_month
+    ),
+    compute_fn = function() {
+      build_historical_portfolio_path(
+        basis = basis,
+        weights = port_eval$weights,
+        g_vector = port_eval$g_vector,
+        cost_bps_pa = state$cost_bps_pa,
+        start_month = model$start_month,
+        end_month = model$end_month
+      )
+    }
   )
+  hist_path <- hist_res$value
   state$current_historical_path <- hist_path
 
   # Evaluate 5-year scenario path
@@ -378,7 +391,8 @@ run_full_evaluation_pipeline <- function(state,
       hedge_config = hc,
       rebalancing_rule = rebalancing_rule,
       cost_bps_pa = state$cost_bps_pa,
-      carry_overrides = state$carry_overrides
+      carry_overrides = state$carry_overrides,
+      fx_spot_overrides = state$fx_spot_overrides
     ),
     counter_name = "scenario_evaluations",
     compute_fn = function() {
@@ -392,6 +406,7 @@ run_full_evaluation_pipeline <- function(state,
         rebalancing_rule = rebalancing_rule,
         cost_bps_pa = state$cost_bps_pa,
         carry_overrides = state$carry_overrides,
+        fx_spot_overrides = state$fx_spot_overrides,
         available_hedge_currencies = model$supported_hedge_currencies %||% model$available_hedge_currencies
       )
     }
@@ -501,9 +516,12 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
       hedge_configs = state$hedge_configs,
       cost_bps_pa = state$cost_bps_pa,
       active_scenario_id = state$active_scenario_id,
-      rebalancing_rule = state$rebalancing_rule
+      rebalancing_rule = state$rebalancing_rule,
+      active_assets = as.list(state$dataset$active_assets %||% state$universe %||% character()),
+      comparison_slots = state$comparison_slots %||% list()
     ),
     portfolio_evaluation = serialize_portfolio_eval(port_eval, pipeline_res$historical_path),
+    custom_cma_sets = state$custom_cma_sets %||% list(),
     scenario_evaluation = if (!is.null(scen_eval) && isTRUE(scen_eval$valid)) {
       list(
         valid = TRUE,
@@ -521,25 +539,26 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
         yearly_path = scen_eval$yearly_path,
         asset_table = scen_eval$asset_table,
         carry_overrides = state$carry_overrides,
+        fx_spot_overrides = state$fx_spot_overrides,
         relevant_hedge_currencies = scen_eval$relevant_hedge_currencies,
         available_hedge_currencies = scen_eval$available_hedge_currencies,
         hedge_currency_summary = scen_eval$hedge_currency_summary
       )
     } else NULL,
-    comparison = if (!is.null(comp_eval) && isTRUE(comp_eval$valid)) {
+      comparison = if (!is.null(comp_eval) && isTRUE(comp_eval$valid)) {
+      te_rows <- lapply(seq_len(nrow(comp_eval$pairwise_tracking_error)), function(i) as.numeric(comp_eval$pairwise_tracking_error[i, ]))
       list(
         benchmark_id = comp_eval$benchmark_id,
         summary_table = comp_eval$summary_table,
         delta_exposures = comp_eval$delta_exposures,
         pairwise_tracking_error = list(
           portfolio_ids = rownames(comp_eval$pairwise_tracking_error),
-          matrix = lapply(seq_len(nrow(comp_eval$pairwise_tracking_error)), function(i) as.numeric(comp_eval$pairwise_tracking_error[i, ])),
-          rows = lapply(seq_len(nrow(comp_eval$pairwise_tracking_error)), function(i) as.numeric(comp_eval$pairwise_tracking_error[i, ]))
+          matrix = te_rows,
+          rows = te_rows
         ),
         cross_model_comparison = comp_eval$cross_model_comparison
       )
     } else NULL,
-    custom_cma_sets = state$custom_cma_sets,
     cache_stats = cache$get_stats()
   )
 
@@ -581,6 +600,34 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
   sanitize_for_json(out)
 }
 
+apply_asset_return_overrides_to_state <- function(state, sc_id, overrides_list) {
+  if (is.null(overrides_list) || length(overrides_list) == 0L) return()
+  ovr <- as.list(overrides_list)
+  horizon <- state$expectations$horizon %||% 5L
+  if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions)) {
+    state$expectations$scenarios[[sc_id]]$asset_assumptions <- list()
+  }
+  for (acode in names(ovr)) {
+    val_num <- as.numeric(ovr[[acode]])
+    if (length(val_num) == 1L && !is.na(val_num)) {
+      r_vec <- rep(val_num, horizon)
+    } else if (length(val_num) == horizon) {
+      r_vec <- val_num
+    } else {
+      r_vec <- rep(0.0, horizon)
+    }
+    if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
+      state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]] <- list(
+        asset_id = acode,
+        annual_local_returns = r_vec
+      )
+    } else {
+      state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- r_vec
+    }
+  }
+  state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
+}
+
 handle_app_command <- function(request, state) {
   if (is.null(request) || (!is.list(request) && !is.vector(request))) {
     return(build_response_envelope(
@@ -612,6 +659,18 @@ handle_app_command <- function(request, state) {
     if (!is.null(payload$universe) && length(payload$universe) > 0L) {
       state$universe <- intersect(as.character(payload$universe), state$dataset$all_assets)
     }
+    # Load server-side persisted user settings ONLY on initial bootstrap (never overwrite live session state on risk.estimate!)
+    if (identical(cmd_type, "app.bootstrap")) {
+      load_server_user_settings(state)
+      base_ccy <- toupper(payload$base_currency %||% ctx$base_currency %||% state$base_currency)
+      ret_mode <- toupper(payload$return_mode %||% ctx$return_mode %||% state$return_mode)
+      mod_id <- as.character(payload$model_id %||% ctx$model_id %||% state$active_model_id)
+      port_id <- as.character(payload$portfolio_id %||% state$active_portfolio_id)
+      scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
+      rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
+      cost_bps <- as.numeric(payload$cost_bps_pa %||% state$cost_bps_pa)
+    }
+
     # Optional client-side custom portfolios sync (e.g. from localStorage)
     if (!is.null(payload$custom_portfolios) && is.list(payload$custom_portfolios)) {
       for (cp in payload$custom_portfolios) {
@@ -685,6 +744,23 @@ handle_app_command <- function(request, state) {
     scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
     rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
 
+    if (!is.null(payload$active_assets)) {
+      act_list <- as.character(unlist(payload$active_assets))
+      reg <- state$dataset
+      if (!is.null(reg) && !is.null(reg$meta)) {
+        reg$meta[Series_Type == "ASSET_TR", Active := Code %in% act_list]
+        state$universe <- order_asset_universe(act_list, reg$meta, base_ccy = state$base_currency)
+        state$dataset$active_assets <- state$universe
+      }
+    }
+
+    raw_hc <- payload$hedge_config
+    if (!is.null(raw_hc)) {
+      hc_norm <- normalize_incoming_hedge_config(raw_hc, state)
+      state$hedge_mode <- hc_norm$mode
+      state$hedge_configs[[hc_norm$mode]] <- hc_norm
+    }
+
     res <- run_full_evaluation_pipeline(
       state = state,
       base_ccy = state$base_currency,
@@ -748,14 +824,23 @@ handle_app_command <- function(request, state) {
       )
     )
 
+    act_assets <- if (!is.null(payload$active_assets)) as.character(unlist(payload$active_assets)) else state$dataset$active_assets
     state$portfolios[[port_id]] <- list(
       id = port_id,
       name = port_name,
       weights = as.list(w_vec),
       hedge_config = p_hc,
+      active_assets = as.list(act_assets),
       is_custom = !(port_id %in% c("saa_25", "saa_50", "saa_75"))
     )
     state$active_portfolio_id <- port_id
+    state$hedge_mode <- hc_norm$mode
+    if (!is.null(p_hc$configs)) {
+      state$hedge_configs <- p_hc$configs
+    } else {
+      state$hedge_configs[[hc_norm$mode]] <- hc_norm
+    }
+    save_server_user_settings(state)
 
     res <- run_full_evaluation_pipeline(
       state = state,
@@ -796,6 +881,7 @@ handle_app_command <- function(request, state) {
     if (identical(state$active_portfolio_id, port_id)) {
       state$active_portfolio_id <- "saa_50"
     }
+    save_server_user_settings(state)
 
     res <- run_full_evaluation_pipeline(
       state = state,
@@ -839,6 +925,7 @@ handle_app_command <- function(request, state) {
       cur_weights[[aid]] <- 0.0
       state$portfolios[[state$active_portfolio_id]]$weights <- cur_weights
     }
+    save_server_user_settings(state)
 
     res <- run_full_evaluation_pipeline(
       state = state,
@@ -849,6 +936,36 @@ handle_app_command <- function(request, state) {
       weights = state$portfolios[[state$active_portfolio_id]]$weights,
       hedge_config = state$hedge_configs[[state$hedge_mode]],
       include_all_models_comparison = FALSE
+    )
+
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "universe.set_active_assets")) {
+    act_list <- as.character(unlist(payload$active_assets %||% character()))
+    reg <- state$dataset
+    if (!is.null(reg) && !is.null(reg$meta)) {
+      reg$meta[Series_Type == "ASSET_TR", Active := Code %in% act_list]
+      state$universe <- order_asset_universe(act_list, reg$meta, base_ccy = state$base_currency)
+      state$dataset$active_assets <- state$universe
+    }
+    save_server_user_settings(state)
+
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      base_ccy = state$base_currency,
+      return_mode = state$return_mode,
+      model_id = state$active_model_id,
+      portfolio_id = state$active_portfolio_id,
+      weights = payload$weights %||% state$portfolios[[state$active_portfolio_id]]$weights,
+      hedge_config = payload$hedge_config %||% state$hedge_configs[[state$hedge_mode]],
+      include_all_models_comparison = TRUE
     )
 
     return(build_response_envelope(
@@ -891,6 +1008,11 @@ handle_app_command <- function(request, state) {
       asset_overrides = converted$asset_overrides,
       currency_ratios = converted$currency_ratios
     )
+    state$hedge_mode <- target_mode
+    state$hedge_configs[[target_mode]] <- new_hc
+    if (!is.null(converted$saved_asset_class_config)) {
+      state$saved_asset_class_config <- converted$saved_asset_class_config
+    }
     res <- run_full_evaluation_pipeline(
       state = state,
       weights = w_vec,
@@ -898,6 +1020,7 @@ handle_app_command <- function(request, state) {
     )
     out_payload <- build_full_client_payload(state, res)
     out_payload$mode_transition <- converted$transition_type
+    out_payload$hedge_config <- new_hc
 
     return(build_response_envelope(
       request = request,
@@ -923,34 +1046,14 @@ handle_app_command <- function(request, state) {
     }
     if (!is.null(payload$asset_return_overrides)) {
       sc_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
-      ovr <- as.list(payload$asset_return_overrides)
-      horizon <- state$expectations$horizon %||% 5L
-      if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions)) {
-        state$expectations$scenarios[[sc_id]]$asset_assumptions <- list()
-      }
-      for (acode in names(ovr)) {
-        val_num <- as.numeric(ovr[[acode]])
-        if (length(val_num) == 1L && !is.na(val_num)) {
-          r_vec <- rep(val_num, horizon)
-        } else if (length(val_num) == horizon) {
-          r_vec <- val_num
-        } else {
-          r_vec <- rep(0.0, horizon)
-        }
-        if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
-          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]] <- list(
-            asset_id = acode,
-            annual_local_returns = r_vec
-          )
-        } else {
-          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- r_vec
-        }
-      }
-      state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
+      apply_asset_return_overrides_to_state(state, sc_id, payload$asset_return_overrides)
     }
 
     if (!is.null(payload$carry_overrides)) {
       state$carry_overrides <- as.list(payload$carry_overrides)
+    }
+    if (!is.null(payload$fx_spot_overrides)) {
+      state$fx_spot_overrides <- as.list(payload$fx_spot_overrides)
     }
 
     scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
@@ -980,40 +1083,22 @@ handle_app_command <- function(request, state) {
       name = set_name,
       scenario_id = sc_id,
       asset_returns = payload$asset_returns,
-      carry_overrides = payload$carry_overrides
+      carry_overrides = payload$carry_overrides,
+      fx_spot_overrides = payload$fx_spot_overrides
     )
 
     # Apply asset return overrides if provided
     if (!is.null(payload$asset_returns)) {
-      ovr <- as.list(payload$asset_returns)
-      horizon <- state$expectations$horizon %||% 5L
-      if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions)) {
-        state$expectations$scenarios[[sc_id]]$asset_assumptions <- list()
-      }
-      for (acode in names(ovr)) {
-        val_num <- as.numeric(ovr[[acode]])
-        if (length(val_num) == 1L && !is.na(val_num)) {
-          r_vec <- rep(val_num, horizon)
-        } else if (length(val_num) == horizon) {
-          r_vec <- val_num
-        } else {
-          r_vec <- rep(0.0, horizon)
-        }
-        if (is.null(state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]])) {
-          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]] <- list(
-            asset_id = acode,
-            annual_local_returns = r_vec
-          )
-        } else {
-          state$expectations$scenarios[[sc_id]]$asset_assumptions[[acode]]$annual_local_returns <- r_vec
-        }
-      }
-      state$expectations$expectations_id <- paste0("custom_", substr(compute_object_hash(state$expectations$scenarios), 1L, 8L))
+      apply_asset_return_overrides_to_state(state, sc_id, payload$asset_returns)
     }
 
     if (!is.null(payload$carry_overrides)) {
       state$carry_overrides <- as.list(payload$carry_overrides)
     }
+    if (!is.null(payload$fx_spot_overrides)) {
+      state$fx_spot_overrides <- as.list(payload$fx_spot_overrides)
+    }
+    save_server_user_settings(state)
 
     rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
     res <- run_full_evaluation_pipeline(
@@ -1042,6 +1127,7 @@ handle_app_command <- function(request, state) {
       ))
     }
     state$custom_cma_sets[[set_id]] <- NULL
+    save_server_user_settings(state)
     res <- run_full_evaluation_pipeline(state = state)
     return(build_response_envelope(
       request = request,
@@ -1069,8 +1155,8 @@ handle_app_command <- function(request, state) {
     ))
   }
 
-  if (identical(cmd_type, "config.import")) {
-    cfg_in <- payload$config_data
+  if (identical(cmd_type, "config.import") || identical(cmd_type, "settings.import")) {
+    cfg_in <- payload$config_data %||% payload$settings %||% payload
     if (is.null(cfg_in) || !is.list(cfg_in)) {
       return(build_response_envelope(
         request = request,
@@ -1079,6 +1165,9 @@ handle_app_command <- function(request, state) {
         issues = list(make_issue("INVALID_CONFIG_JSON", "ERROR", "Ungültige JSON-Konfigurationsdatei.", "CONFIG"))
       ))
     }
+    apply_settings_to_state(state, cfg_in)
+    save_server_user_settings(state)
+
     base_ccy <- toupper(cfg_in$base_currency %||% state$base_currency)
     ret_mode <- toupper(cfg_in$return_mode %||% state$return_mode)
     mod_id <- as.character(cfg_in$active_model_id %||% state$active_model_id)
@@ -1087,17 +1176,14 @@ handle_app_command <- function(request, state) {
     rebal <- as.character(cfg_in$rebalancing_rule %||% state$rebalancing_rule)
     cost_bps <- as.numeric(cfg_in$cost_bps_pa %||% state$cost_bps_pa)
 
-    if (!is.null(cfg_in$portfolios) && is.list(cfg_in$portfolios)) {
-      state$portfolios <- cfg_in$portfolios
-    }
     res <- run_full_evaluation_pipeline(
       state = state,
       base_ccy = base_ccy,
       return_mode = ret_mode,
       model_id = mod_id,
       portfolio_id = port_id,
-      weights = cfg_in$weights,
-      hedge_config = cfg_in$hedge_config,
+      weights = cfg_in$weights %||% state$portfolios[[port_id]]$weights,
+      hedge_config = cfg_in$hedge_config %||% state$hedge_configs[[state$hedge_mode]],
       scenario_id = scen_id,
       rebalancing_rule = rebal,
       cost_bps_pa = cost_bps
@@ -1108,6 +1194,16 @@ handle_app_command <- function(request, state) {
       status = if (isTRUE(res$valid)) "ok" else "error",
       result = build_full_client_payload(state, res),
       issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "settings.export") || identical(cmd_type, "config.export")) {
+    settings_payload <- build_user_settings_payload(state)
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = "ok",
+      result = list(settings = settings_payload)
     ))
   }
 

@@ -154,10 +154,13 @@ function renderActiveTabCharts() {
     if (mode === 'HEATMAP') {
       charts.renderCorrelationHeatmap('chart_correlation_heatmap', cm.correlation);
     }
-    const decompItems = st.ui_filters.risk_decomp_level === 'COMPONENT'
+    const level = st.ui_filters.risk_decomp_level || 'ASSET';
+    const decompItems = level === 'COMPONENT'
       ? ev.component_contributions
-      : ev.asset_contributions;
-    const idField = st.ui_filters.risk_decomp_level === 'COMPONENT' ? 'component_id' : 'asset_id';
+      : (level === 'CLASS' ? ev.class_contributions : ev.asset_contributions);
+    const idField = level === 'COMPONENT'
+      ? 'component_id'
+      : (level === 'CLASS' ? 'asset_class' : 'asset_id');
     charts.renderRiskContributionsChart('chart_risk_contributions', decompItems, idField);
   } else if (tab === 'returns' && sc) {
     charts.renderScenarioPathChart('chart_scenario_paths', sc.yearly_path || [], st.base_currency);
@@ -387,12 +390,16 @@ function bindUIEvents() {
         confirmClass: 'btn-primary',
         onConfirm: () => {
           const hcToSave = getFullHedgeConfigToSave();
-          store.saveCustomPortfolio(pid, name, store.state.draft_weights, hcToSave);
+          const activeAssets = Array.isArray(store.state.universe) && store.state.universe.length > 0
+            ? [...store.state.universe]
+            : (store.state.metadata || []).filter(m => m.Active && m.Series_Type === 'ASSET_TR').map(m => m.Code);
+          store.saveCustomPortfolio(pid, name, store.state.draft_weights, hcToSave, activeAssets);
           bridge.sendCommand('portfolio.save', {
             portfolio_id: pid,
             name: name,
             weights: store.state.draft_weights,
             hedge_config: hcToSave,
+            active_assets: activeAssets,
             cost_bps_pa: store.state.cost_bps_pa
           });
           return true;
@@ -424,13 +431,17 @@ function bindUIEvents() {
           if (!name) return false;
           const newId = 'custom_' + Date.now();
           const hcToSave = getFullHedgeConfigToSave();
-          store.saveCustomPortfolio(newId, name, store.state.draft_weights, hcToSave);
+          const activeAssets = Array.isArray(store.state.universe) && store.state.universe.length > 0
+            ? [...store.state.universe]
+            : (store.state.metadata || []).filter(m => m.Active && m.Series_Type === 'ASSET_TR').map(m => m.Code);
+          store.saveCustomPortfolio(newId, name, store.state.draft_weights, hcToSave, activeAssets);
           store.state.active_portfolio_id = newId;
           bridge.sendCommand('portfolio.save', {
             portfolio_id: newId,
             name: name,
             weights: store.state.draft_weights,
             hedge_config: hcToSave,
+            active_assets: activeAssets,
             cost_bps_pa: store.state.cost_bps_pa
           });
           return true;
@@ -503,6 +514,9 @@ function bindUIEvents() {
   if (btnModeClass) {
     btnModeClass.addEventListener('click', () => {
       if (store.state.hedge_mode === 'ASSET_CLASS') return;
+      store.state.hedge_mode = 'ASSET_CLASS';
+      btnModeClass.classList.add('active');
+      if (btnModeOverlay) btnModeOverlay.classList.remove('active');
       const fallbackPol = selFallback ? selFallback.value : 'RESTORE_SAVED';
       bridge.sendCommand('hedge.convert_mode', {
         target_mode: 'ASSET_CLASS',
@@ -516,6 +530,9 @@ function bindUIEvents() {
   if (btnModeOverlay) {
     btnModeOverlay.addEventListener('click', () => {
       if (store.state.hedge_mode === 'CURRENCY_OVERLAY') return;
+      store.state.hedge_mode = 'CURRENCY_OVERLAY';
+      btnModeOverlay.classList.add('active');
+      if (btnModeClass) btnModeClass.classList.remove('active');
       bridge.sendCommand('hedge.convert_mode', {
         target_mode: 'CURRENCY_OVERLAY',
         weights: store.state.draft_weights,
@@ -607,7 +624,8 @@ function bindUIEvents() {
       if (row.asset_id) retMap[row.asset_id] = Number(row.cagr_local_5y || 0);
     }
     const carryMap = store.state.carry_overrides ? JSON.parse(JSON.stringify(store.state.carry_overrides)) : {};
-    return { retMap, carryMap };
+    const fxSpotMap = store.state.fx_spot_overrides ? JSON.parse(JSON.stringify(store.state.fx_spot_overrides)) : {};
+    return { retMap, carryMap, fxSpotMap };
   };
 
   const btnSaveCma = document.getElementById('btn_save_cma_set');
@@ -625,15 +643,16 @@ function bindUIEvents() {
             <div style="padding: 8px 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; margin-bottom: 12px; color: #856404; font-size: var(--text-xs);">
               <strong>Hinweis:</strong> Sie überschreiben die Standard-Werte für <em>"${curName}"</em> für die laufende Sitzung.
             </div>
-            <p style="margin: 0 0 10px 0;">Möchten Sie die geänderten Rendite- und Carry-Werte für <strong>"${curName}"</strong> speichern?</p>
+            <p style="margin: 0 0 10px 0;">Möchten Sie die geänderten Rendite-, Carry- und FX-Spot-Werte für <strong>"${curName}"</strong> speichern?</p>
           `,
           confirmText: 'Überschreiben',
           onConfirm: () => {
-            const { retMap, carryMap } = getCurrentCmaValues();
+            const { retMap, carryMap, fxSpotMap } = getCurrentCmaValues();
             bridge.sendCommand('scenarios.evaluate', {
               scenario_id: store.state.active_scenario_id,
               rebalancing_rule: store.state.rebalancing_rule,
               carry_overrides: carryMap,
+              fx_spot_overrides: fxSpotMap,
               asset_return_overrides: retMap
             });
           }
@@ -642,21 +661,22 @@ function bindUIEvents() {
         showModal({
           title: 'CMA-Set speichern',
           bodyHtml: `
-            <p style="margin: 0 0 10px 0;">Möchten Sie das benutzerdefinierte CMA-Set <strong>"${curName}"</strong> mit den aktuellen Rendite- und Carry-Werten überschreiben?</p>
+            <p style="margin: 0 0 10px 0;">Möchten Sie das benutzerdefinierte CMA-Set <strong>"${curName}"</strong> mit den aktuellen Rendite-, Carry- und FX-Spot-Werten überschreiben?</p>
             <div style="font-size: var(--text-xs); color: var(--text-secondary);">
-              Bestehende Renditeerwartungen dieses Sets werden aktualisiert.
+              Bestehende Renditeerwartungen und FX-Annahmen dieses Sets werden aktualisiert.
             </div>
           `,
           confirmText: 'Speichern',
           onConfirm: () => {
-            const { retMap, carryMap } = getCurrentCmaValues();
-            store.saveCustomCmaSet(curId, curName, retMap, carryMap, store.state.active_scenario_id);
+            const { retMap, carryMap, fxSpotMap } = getCurrentCmaValues();
+            store.saveCustomCmaSet(curId, curName, retMap, carryMap, store.state.active_scenario_id, fxSpotMap);
             bridge.sendCommand('cma.save', {
               set_id: curId,
               name: curName,
               scenario_id: store.state.active_scenario_id,
               asset_returns: retMap,
-              carry_overrides: carryMap
+              carry_overrides: carryMap,
+              fx_spot_overrides: fxSpotMap
             });
           }
         });
@@ -674,7 +694,7 @@ function bindUIEvents() {
           <label for="modal_cma_name_input" style="display: block; font-weight: 600; margin-bottom: 6px;">Bezeichnung des CMA-Sets:</label>
           <input type="text" id="modal_cma_name_input" class="form-control" style="width: 100%;" value="${defName}" maxlength="60" />
           <div style="font-size: var(--text-xs); color: var(--text-secondary); margin-top: 8px;">
-            Speichert alle aktuellen lokalen 5J-Renditeerwartungen und Carry-Annahmen als neues eigenständiges Set.
+            Speichert alle aktuellen lokalen 5J-Renditeerwartungen, Carry-Annahmen und FX-Kassakursveränderungen als neues eigenständiges Set.
           </div>
         `,
         confirmText: 'Als Neu anlegen',
@@ -683,14 +703,15 @@ function bindUIEvents() {
           const val = (inp?.value || '').trim();
           if (!val) return false;
           const newId = `cma_custom_${Date.now()}`;
-          const { retMap, carryMap } = getCurrentCmaValues();
-          store.saveCustomCmaSet(newId, val, retMap, carryMap, store.state.active_scenario_id);
+          const { retMap, carryMap, fxSpotMap } = getCurrentCmaValues();
+          store.saveCustomCmaSet(newId, val, retMap, carryMap, store.state.active_scenario_id, fxSpotMap);
           bridge.sendCommand('cma.save', {
             set_id: newId,
             name: val,
             scenario_id: store.state.active_scenario_id,
             asset_returns: retMap,
-            carry_overrides: carryMap
+            carry_overrides: carryMap,
+            fx_spot_overrides: fxSpotMap
           });
           renderWorkspaceForTab('returns');
         }
@@ -727,7 +748,16 @@ function bindUIEvents() {
   const selScen = document.getElementById('select_scenario_id');
   if (selScen) {
     selScen.addEventListener('change', e => {
-      store.state.active_scenario_id = e.target.value;
+      const scId = e.target.value;
+      store.state.active_scenario_id = scId;
+      // Keep built-in CMA set selector in sync when switching macro path
+      if (!store.state.active_cma_set_id || ['cma_base', 'cma_stagflation', 'cma_disinflation'].includes(store.state.active_cma_set_id)) {
+        store.state.active_cma_set_id = scId === 'stagflation_5y'
+          ? 'cma_stagflation'
+          : (scId === 'disinflation_boom_5y' ? 'cma_disinflation' : 'cma_base');
+        const selCma = document.getElementById('select_active_cma_set');
+        if (selCma) selCma.value = store.state.active_cma_set_id;
+      }
       bridge.sendCommand('scenarios.evaluate', {
         scenario_id: store.state.active_scenario_id,
         rebalancing_rule: store.state.rebalancing_rule
@@ -790,13 +820,25 @@ function bindUIEvents() {
     });
   }
 
-  // Save / Load versioned JSON configuration locally
+  // Save / Load complete versioned JSON settings (Server-persistence & Posit Connect export/restore)
   const btnSaveCfg = document.getElementById('btn_save_json_config');
   if (btnSaveCfg) {
     btnSaveCfg.addEventListener('click', () => {
       const st = store.state;
+      const custPorts = {};
+      if (st.portfolios) {
+        for (const [pid, p] of Object.entries(st.portfolios)) {
+          if (p.is_custom || !['saa_25', 'saa_50', 'saa_75'].includes(pid)) {
+            custPorts[pid] = p;
+          }
+        }
+      }
+      const activeAssets = Array.isArray(st.universe) && st.universe.length > 0
+        ? [...st.universe]
+        : (st.metadata || []).filter(m => m.Active && m.Series_Type === 'ASSET_TR').map(m => m.Code);
+
       const cfgBlob = {
-        schema_version: 1,
+        schema_version: 2,
         saved_at: new Date().toISOString(),
         dataset_id: st.dataset?.dataset_id,
         base_currency: st.base_currency,
@@ -806,16 +848,23 @@ function bindUIEvents() {
         weights: st.draft_weights,
         hedge_mode: st.hedge_mode,
         hedge_config: st.draft_hedge_config,
+        hedge_configs: st.hedge_configs,
         cost_bps_pa: st.cost_bps_pa,
         active_scenario_id: st.active_scenario_id,
         rebalancing_rule: st.rebalancing_rule,
-        portfolios: st.portfolios
+        portfolios: st.portfolios,
+        custom_portfolios: custPorts,
+        custom_cma_sets: st.custom_cma_sets || {},
+        active_assets: activeAssets,
+        carry_overrides: st.carry_overrides || {},
+        fx_spot_overrides: st.fx_spot_overrides || {},
+        comparison_slots: st.comparison_slots || []
       };
       const blob = new Blob([JSON.stringify(cfgBlob, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `maps_config_${st.base_currency}_${st.active_portfolio_id}.json`;
+      a.download = `maps_settings_${st.base_currency}_${st.active_portfolio_id}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -832,7 +881,18 @@ function bindUIEvents() {
       reader.onload = evt => {
         try {
           const parsed = JSON.parse(String(evt.target.result));
-          bridge.sendCommand('config.import', { config_data: parsed });
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.custom_portfolios) {
+              store.state.custom_portfolios = { ...(store.state.custom_portfolios || {}), ...parsed.custom_portfolios };
+            }
+            if (parsed.custom_cma_sets) {
+              store.state.custom_cma_sets = { ...(store.state.custom_cma_sets || {}), ...parsed.custom_cma_sets };
+            }
+            if (parsed.carry_overrides) store.state.carry_overrides = parsed.carry_overrides;
+            if (parsed.fx_spot_overrides) store.state.fx_spot_overrides = parsed.fx_spot_overrides;
+            if (parsed.comparison_slots) store.state.comparison_slots = parsed.comparison_slots;
+            bridge.sendCommand('config.import', { config_data: parsed });
+          }
         } catch (err) {
           store.setCalcState('failed', 'JSON-Konfigurationsdatei konnte nicht gelesen werden.');
         }

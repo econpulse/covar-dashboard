@@ -89,12 +89,29 @@ sanitize_for_json <- function(x) {
     return(x)
   }
   if (is.data.frame(x)) {
-    out <- as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
-    if (nrow(out) == 0L) return(list())
-    for (nm in names(out)) {
-      out[[nm]] <- sanitize_for_json(out[[nm]])
-    }
-    return(unname(do.call(Map, c(list(f = function(...) list(...)), as.list(out)))))
+    nr <- nrow(x)
+    if (nr == 0L) return(list())
+    cols <- lapply(as.list(x), function(col) {
+      if (inherits(col, "Date") || inherits(col, "POSIXt")) {
+        format(col, "%Y-%m-%d")
+      } else if (is.numeric(col)) {
+        bad <- is.nan(col) | is.infinite(col)
+        if (any(bad)) col[bad] <- NA_real_
+        col
+      } else if (is.factor(col)) {
+        as.character(col)
+      } else if (is.list(col)) {
+        lapply(col, sanitize_for_json)
+      } else {
+        col
+      }
+    })
+    col_names <- names(cols)
+    return(lapply(seq_len(nr), function(i) {
+      row_list <- lapply(cols, `[`, i)
+      names(row_list) <- col_names
+      row_list
+    }))
   }
   if (is.list(x)) {
     return(lapply(x, sanitize_for_json))

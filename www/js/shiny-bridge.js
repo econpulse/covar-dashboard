@@ -119,7 +119,8 @@ export class ShinyBridge {
         if (!this.store.state.connection.connected) {
           onConnected();
         }
-        if (!this.store.state.dataset) {
+        if (!this.store.state.dataset && !this.bootstrapSent) {
+          this.bootstrapSent = true;
           this.sendCommand('app.bootstrap', {
             base_currency: this.store.state.base_currency,
             model_id: this.store.state.active_model_id,

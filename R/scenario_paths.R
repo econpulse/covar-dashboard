@@ -14,6 +14,7 @@ evaluate_return_scenarios <- function(expectations,
                                       rebalancing_rule = NULL,
                                       cost_bps_pa = 0.0,
                                       carry_overrides = NULL,
+                                      fx_spot_overrides = NULL,
                                       available_hedge_currencies = NULL) {
   exp_obj <- if (inherits(expectations, "maps_expectations")) {
     expectations
@@ -109,7 +110,13 @@ evaluate_return_scenarios <- function(expectations,
     r_short_c <- as.numeric(short_rates[[ccy]] %||% rep(0.0, horizon))
     # Cross rate growth factor S_y^(B/C) / S_{y-1}^(B/C) = (V_{C,y}/V_{C,y-1}) / (V_{B,y}/V_{B,y-1})
     s_growth <- if (identical(ccy, base_ccy)) rep(1.0, horizon) else (v_fac_c / v_factor_base)
-    fx_ret <- s_growth - 1.0
+    fx_ret <- if (identical(ccy, base_ccy)) {
+      rep(0.0, horizon)
+    } else if (!is.null(fx_spot_overrides) && ccy %in% names(fx_spot_overrides) && !is.na(as.numeric(fx_spot_overrides[[ccy]]))) {
+      rep(as.numeric(fx_spot_overrides[[ccy]]), horizon)
+    } else {
+      s_growth - 1.0
+    }
     # Covered interest parity forward carry or explicit user override:
     carry_vec <- if (identical(ccy, base_ccy)) {
       rep(0.0, horizon)
@@ -273,7 +280,9 @@ evaluate_return_scenarios <- function(expectations,
     } else 0.0
 
     avg_c <- if (!is.null(z_info)) mean(z_info$carry) else 0.0
+    avg_spot <- if (!is.null(z_info)) mean(z_info$fx_return) else 0.0
     is_ovr <- !is.null(carry_overrides) && ccy %in% names(carry_overrides) && !is.na(as.numeric(carry_overrides[[ccy]]))
+    is_spot_ovr <- !is.null(fx_spot_overrides) && ccy %in% names(fx_spot_overrides) && !is.na(as.numeric(fx_spot_overrides[[ccy]]))
 
     list(
       currency = ccy,
@@ -283,7 +292,9 @@ evaluate_return_scenarios <- function(expectations,
       portfolio_exposure = port_exp,
       applied_hedge_ratio = applied_h_ratio,
       avg_forward_carry_pa = avg_c,
-      is_overridden = is_ovr
+      is_overridden = is_ovr,
+      avg_spot_return_pa = avg_spot,
+      is_spot_overridden = is_spot_ovr
     )
   })
 

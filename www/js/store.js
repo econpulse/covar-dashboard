@@ -98,13 +98,17 @@ export class AppStore {
     this.listeners = new Set();
   }
 
-  saveCustomPortfolio(portId, name, weights, hedgeConfig = null) {
+  saveCustomPortfolio(portId, name, weights, hedgeConfig = null, activeAssets = null) {
     if (!this.state.custom_portfolios) this.state.custom_portfolios = {};
+    const acts = activeAssets || (Array.isArray(this.state.universe) && this.state.universe.length > 0
+      ? [...this.state.universe]
+      : (this.state.metadata || []).filter(m => m.Active && m.Series_Type === 'ASSET_TR').map(m => m.Code));
     const pObj = {
       id: portId,
       name: name || portId,
       weights: { ...(weights || {}) },
       hedge_config: hedgeConfig ? JSON.parse(JSON.stringify(hedgeConfig)) : null,
+      active_assets: acts,
       is_custom: true
     };
     this.state.custom_portfolios[portId] = pObj;
@@ -120,6 +124,16 @@ export class AppStore {
     if (tpl) {
       if (tpl.weights) {
         this.state.draft_weights = { ...tpl.weights };
+      }
+      if (tpl.active_assets && Array.isArray(tpl.active_assets) && tpl.active_assets.length > 0) {
+        this.state.universe = [...tpl.active_assets];
+        if (Array.isArray(this.state.metadata)) {
+          for (const m of this.state.metadata) {
+            if (m.Series_Type === 'ASSET_TR') {
+              m.Active = tpl.active_assets.includes(m.Code);
+            }
+          }
+        }
       }
       if (tpl.hedge_config) {
         const hc = tpl.hedge_config;
@@ -145,6 +159,7 @@ export class AppStore {
       portfolio_id: portId,
       weights: this.state.draft_weights,
       hedge_config: this.state.draft_hedge_config,
+      active_assets: tpl?.active_assets || this.state.universe,
       cost_bps_pa: this.state.cost_bps_pa
     });
   }
@@ -158,17 +173,18 @@ export class AppStore {
       } catch (e) {}
     }
     if (Array.isArray(this.state.comparison_slots)) {
-      this.state.comparison_slots = this.state.comparison_slots.map(s => {
+      const cleaned = this.state.comparison_slots.map(s => {
         if (s === portId || s === `${portId}_unhedged`) return '';
         return s;
       });
+      this.state.comparison_slots = this.compactComparisonSlots(cleaned);
       try {
         localStorage.setItem('lukb_comparison_slots', JSON.stringify(this.state.comparison_slots));
       } catch (_) {}
     }
   }
 
-  saveCustomCmaSet(setId, name, assetReturns, carryOverrides, scenarioId = 'base_5y') {
+  saveCustomCmaSet(setId, name, assetReturns, carryOverrides, scenarioId = 'base_5y', fxSpotOverrides = null) {
     if (!setId) setId = `cma_custom_${Date.now()}`;
     if (!this.state.custom_cma_sets) this.state.custom_cma_sets = {};
     const setObj = {
@@ -176,7 +192,8 @@ export class AppStore {
       name: name || setId,
       scenario_id: scenarioId,
       asset_returns: assetReturns || {},
-      carry_overrides: carryOverrides || {}
+      carry_overrides: carryOverrides || {},
+      fx_spot_overrides: fxSpotOverrides || {}
     };
     this.state.custom_cma_sets[setId] = setObj;
     this.state.active_cma_set_id = setId;
@@ -204,10 +221,12 @@ export class AppStore {
     if (customSet) {
       this.state.active_scenario_id = customSet.scenario_id || 'base_5y';
       this.state.carry_overrides = customSet.carry_overrides ? JSON.parse(JSON.stringify(customSet.carry_overrides)) : {};
+      this.state.fx_spot_overrides = customSet.fx_spot_overrides ? JSON.parse(JSON.stringify(customSet.fx_spot_overrides)) : {};
       bridge.sendCommand('scenarios.evaluate', {
         scenario_id: this.state.active_scenario_id,
         rebalancing_rule: this.state.rebalancing_rule,
         carry_overrides: this.state.carry_overrides,
+        fx_spot_overrides: this.state.fx_spot_overrides,
         asset_return_overrides: customSet.asset_returns || {}
       });
     } else {
@@ -216,12 +235,31 @@ export class AppStore {
       if (setId === 'cma_disinflation') scId = 'disinflation_boom_5y';
       this.state.active_scenario_id = scId;
       this.state.carry_overrides = {};
+      this.state.fx_spot_overrides = {};
       bridge.sendCommand('scenarios.evaluate', {
         scenario_id: scId,
         rebalancing_rule: this.state.rebalancing_rule,
-        carry_overrides: {}
+        carry_overrides: {},
+        fx_spot_overrides: {}
       });
     }
+  }
+
+  compactComparisonSlots(slots) {
+    const arr = Array.isArray(slots) ? slots : [];
+    const seen = new Set();
+    const filled = [];
+    for (const s of arr) {
+      const id = (s || '').trim();
+      if (id && !seen.has(id) && filled.length < 6) {
+        seen.add(id);
+        filled.push(id);
+      }
+    }
+    while (filled.length < 6) {
+      filled.push('');
+    }
+    return filled;
   }
 
   setComparisonSlot(slotIndex, portfolioId) {
@@ -239,15 +277,18 @@ export class AppStore {
     }
 
     slots[slotIndex] = portfolioId || '';
-    this.state.comparison_slots = slots;
+    const compacted = this.compactComparisonSlots(slots);
+    this.state.comparison_slots = compacted;
     try {
-      localStorage.setItem('lukb_comparison_slots', JSON.stringify(slots));
+      localStorage.setItem('lukb_comparison_slots', JSON.stringify(compacted));
     } catch (_) {}
   }
 
   initComparisonSlotsIfNeeded() {
     const comp = this.state.results.comparison;
     if (!comp || !Array.isArray(comp.summary_table)) return;
+    const available = comp.summary_table.map(x => x.portfolio_id);
+    const availableSet = new Set(available);
 
     let slots = this.state.comparison_slots;
     if (!Array.isArray(slots) || slots.length !== 6 || slots.every(s => !s)) {
@@ -260,14 +301,17 @@ export class AppStore {
       } catch (_) {}
     }
 
+    if (availableSet.size > 0 && Array.isArray(slots)) {
+      slots = slots.map(id => (id && availableSet.has(id)) ? id : '');
+    }
+
     if (!Array.isArray(slots) || slots.length !== 6 || slots.every(s => !s)) {
       slots = ['', '', '', '', '', ''];
       const activeId = this.state.active_portfolio_id || 'saa_50';
-      const available = comp.summary_table.map(x => x.portfolio_id);
 
-      if (available.includes(activeId)) slots[0] = activeId;
+      if (availableSet.has(activeId)) slots[0] = activeId;
       const activeUnh = `${activeId}_unhedged`;
-      if (available.includes(activeUnh)) slots[1] = activeUnh;
+      if (availableSet.has(activeUnh)) slots[1] = activeUnh;
 
       let slotIdx = 2;
       for (const pid of available) {
@@ -278,7 +322,7 @@ export class AppStore {
       }
     }
 
-    this.state.comparison_slots = slots;
+    this.state.comparison_slots = this.compactComparisonSlots(slots);
   }
 
   subscribe(fn) {
@@ -389,12 +433,25 @@ export class AppStore {
       this.state.cost_bps_pa = typeof cfg.cost_bps_pa === 'number' ? cfg.cost_bps_pa : 0;
       this.state.risk_settings = cfg.risk_models || this.state.risk_settings;
       this.state.portfolios = { ...(cfg.portfolios || {}), ...(this.state.custom_portfolios || {}) };
-      this.state.hedge_mode = cfg.hedge_mode || this.state.hedge_mode;
-      if (cfg.hedge_configs) {
-        this.state.hedge_configs = cfg.hedge_configs;
+      if (!this.state.draft_hedge_config || reqType === 'app.bootstrap' || reqType === 'hedge.convert_mode') {
+        if (cfg.hedge_mode) this.state.hedge_mode = cfg.hedge_mode;
+        if (cfg.hedge_configs) this.state.hedge_configs = cfg.hedge_configs;
       }
       if (cfg.expectations) {
         this.state.expectations = cfg.expectations;
+      }
+      if (cfg.active_assets && Array.isArray(cfg.active_assets)) {
+        this.state.universe = [...cfg.active_assets];
+        if (Array.isArray(this.state.metadata)) {
+          for (const m of this.state.metadata) {
+            if (m.Series_Type === 'ASSET_TR') {
+              m.Active = cfg.active_assets.includes(m.Code);
+            }
+          }
+        }
+      }
+      if (cfg.comparison_slots && Array.isArray(cfg.comparison_slots)) {
+        this.state.comparison_slots = this.compactComparisonSlots(cfg.comparison_slots);
       }
     }
 
@@ -409,13 +466,31 @@ export class AppStore {
       this.state.results.portfolio_evaluation = res.portfolio_evaluation;
       this.state.results.preview_evaluation = null;
       this.state.draft_weights = { ...(res.portfolio_evaluation.weights || {}) };
-      const curPort = this.state.portfolios?.[this.state.active_portfolio_id];
-      if (curPort && curPort.hedge_config) {
-        this.state.draft_hedge_config = JSON.parse(JSON.stringify(curPort.hedge_config));
-      } else {
-        this.state.draft_hedge_config = JSON.parse(
-          JSON.stringify(this.state.hedge_configs[this.state.hedge_mode] || {})
-        );
+
+      if (res.portfolio_evaluation.exposures?.active_mode) {
+        this.state.hedge_mode = res.portfolio_evaluation.exposures.active_mode;
+      }
+
+      if (res.hedge_config) {
+        this.state.draft_hedge_config = JSON.parse(JSON.stringify(res.hedge_config));
+        if (res.hedge_config.mode) {
+          this.state.hedge_mode = res.hedge_config.mode;
+        }
+      } else if (!this.state.draft_hedge_config) {
+        const curPort = this.state.portfolios?.[this.state.active_portfolio_id];
+        if (curPort && curPort.hedge_config) {
+          this.state.draft_hedge_config = JSON.parse(JSON.stringify(curPort.hedge_config));
+        } else {
+          this.state.draft_hedge_config = JSON.parse(
+            JSON.stringify(this.state.hedge_configs[this.state.hedge_mode] || {})
+          );
+        }
+      }
+
+      if (this.state.draft_hedge_config?.mode) {
+        const hm = this.state.draft_hedge_config.mode;
+        if (!this.state.hedge_configs) this.state.hedge_configs = {};
+        this.state.hedge_configs[hm] = JSON.parse(JSON.stringify(this.state.draft_hedge_config));
       }
     }
 
@@ -423,6 +498,9 @@ export class AppStore {
       this.state.results.scenario_evaluation = res.scenario_evaluation;
       if (res.scenario_evaluation.carry_overrides) {
         this.state.carry_overrides = res.scenario_evaluation.carry_overrides;
+      }
+      if (res.scenario_evaluation.fx_spot_overrides) {
+        this.state.fx_spot_overrides = res.scenario_evaluation.fx_spot_overrides;
       }
     }
 

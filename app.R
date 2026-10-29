@@ -45,13 +45,16 @@ APP_CONFIG <- load_app_config()
 GLOBAL_SHARED_CACHE <- create_cache_manager(max_size_mb = 256)
 ASYNC_STATUS <- init_async_workers(max_workers = 1L)
 
-# Pre-warm house dataset (Data.xlsx) for CHF/EUR/USD in process-shared cache
+# Pre-warm house dataset (Data.xlsx) for CHF/EUR/USD across all risk models in process-shared cache
 if (file.exists(APP_CONFIG$default_workbook_path)) {
   tryCatch({
     warmup_state <- create_session_state(APP_CONFIG, shared_cache = GLOBAL_SHARED_CACHE)
     if (isTRUE(load_dataset_into_state(warmup_state, APP_CONFIG$default_workbook_path, is_private = FALSE)$valid)) {
+      all_model_ids <- names(APP_CONFIG$risk_models) %||% APP_CONFIG$default_risk_model
       for (ccy in APP_CONFIG$supported_base_currencies) {
-        get_or_estimate_covariance(warmup_state, model_id = APP_CONFIG$default_risk_model, base_ccy = ccy)
+        for (mid in all_model_ids) {
+          get_or_estimate_covariance(warmup_state, model_id = mid, base_ccy = ccy)
+        }
       }
     }
   }, error = function(e) {

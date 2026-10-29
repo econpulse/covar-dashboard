@@ -34,7 +34,9 @@ create_session_state <- function(config, shared_cache = NULL) {
   state$saved_asset_class_config <- config$default_hedge_configs$ASSET_CLASS
   state$expectations <- validate_expectations(config$default_expectations)
   state$carry_overrides <- list()
+  state$fx_spot_overrides <- list()
   state$custom_cma_sets <- list()
+  state$comparison_slots <- list()
 
   # Active computed artifacts
   state$current_basis <- NULL
@@ -277,4 +279,141 @@ get_or_estimate_covariance <- function(state,
     basis_cache_hit = basis_res$cache_hit,
     model_cache_hit = cov_res$cache_hit
   )
+}
+
+# ==============================================================================
+# Server-side user settings persistence & Posit Connect deployment restore
+# ==============================================================================
+
+get_user_settings_filepath <- function() {
+  override <- Sys.getenv("MAPS_USER_SETTINGS_FILE", unset = "")
+  if (nzchar(override)) return(override)
+  # Isolate tests to tempdir so unit test runs don't interfere across sessions
+  if (isTRUE(tryCatch(testthat::is_testing(), error = function(...) FALSE))) {
+    return(file.path(tempdir(), "user_settings_test.json"))
+  }
+  if (dir.exists("config")) {
+    return(file.path("config", "user_settings.json"))
+  }
+  if (dir.exists(file.path("..", "config"))) {
+    return(file.path("..", "config", "user_settings.json"))
+  }
+  if (dir.exists(file.path("..", "..", "config"))) {
+    return(file.path("..", "..", "config", "user_settings.json"))
+  }
+  file.path("config", "user_settings.json")
+}
+
+build_user_settings_payload <- function(state) {
+  cust_ports <- list()
+  if (!is.null(state$portfolios) && is.list(state$portfolios)) {
+    for (pid in names(state$portfolios)) {
+      p <- state$portfolios[[pid]]
+      if (isTRUE(p$is_custom) || !(pid %in% c("saa_25", "saa_50", "saa_75"))) {
+        cust_ports[[pid]] <- p
+      }
+    }
+  }
+  list(
+    schema_version = 2L,
+    saved_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+    custom_portfolios = cust_ports,
+    custom_cma_sets = state$custom_cma_sets %||% list(),
+    active_portfolio_id = state$active_portfolio_id,
+    active_model_id = state$active_model_id,
+    base_currency = state$base_currency,
+    return_mode = state$return_mode,
+    active_scenario_id = state$active_scenario_id,
+    rebalancing_rule = state$rebalancing_rule,
+    cost_bps_pa = state$cost_bps_pa,
+    hedge_mode = state$hedge_mode,
+    active_assets = as.list(state$dataset$active_assets %||% state$universe %||% character()),
+    carry_overrides = state$carry_overrides %||% list(),
+    fx_spot_overrides = state$fx_spot_overrides %||% list(),
+    comparison_slots = state$comparison_slots %||% list()
+  )
+}
+
+save_server_user_settings <- function(state) {
+  tryCatch({
+    # Skip automatic disk writes during testthat runs unless explicit file path is requested
+    if (isTRUE(tryCatch(testthat::is_testing(), error = function(...) FALSE)) && !nzchar(Sys.getenv("MAPS_USER_SETTINGS_FILE", ""))) {
+      return(TRUE)
+    }
+    fp <- get_user_settings_filepath()
+    payload <- build_user_settings_payload(state)
+    json_txt <- jsonlite::toJSON(payload, auto_unbox = TRUE, pretty = TRUE, null = "null")
+    writeLines(json_txt, fp)
+    TRUE
+  }, error = function(e) {
+    warning(sprintf("Speichern der User-Settings auf Server: %s", e$message))
+    FALSE
+  })
+}
+
+apply_settings_to_state <- function(state, parsed) {
+  if (!is.null(parsed$custom_portfolios) && is.list(parsed$custom_portfolios)) {
+    for (pid in names(parsed$custom_portfolios)) {
+      state$portfolios[[pid]] <- parsed$custom_portfolios[[pid]]
+    }
+  }
+  if (!is.null(parsed$portfolios) && is.list(parsed$portfolios)) {
+    for (pid in names(parsed$portfolios)) {
+      p <- parsed$portfolios[[pid]]
+      if (isTRUE(p$is_custom) || !(pid %in% c("saa_25", "saa_50", "saa_75"))) {
+        state$portfolios[[pid]] <- p
+      }
+    }
+  }
+  if (!is.null(parsed$custom_cma_sets) && is.list(parsed$custom_cma_sets)) {
+    state$custom_cma_sets <- parsed$custom_cma_sets
+  }
+  if (!is.null(parsed$active_portfolio_id) && nzchar(parsed$active_portfolio_id)) {
+    state$active_portfolio_id <- as.character(parsed$active_portfolio_id)
+  }
+  if (!is.null(parsed$base_currency)) state$base_currency <- as.character(parsed$base_currency)
+  if (!is.null(parsed$return_mode)) state$return_mode <- as.character(parsed$return_mode)
+  if (!is.null(parsed$active_model_id)) state$active_model_id <- as.character(parsed$active_model_id)
+  if (!is.null(parsed$active_scenario_id)) state$active_scenario_id <- as.character(parsed$active_scenario_id)
+  if (!is.null(parsed$rebalancing_rule)) state$rebalancing_rule <- as.character(parsed$rebalancing_rule)
+  if (!is.null(parsed$cost_bps_pa)) state$cost_bps_pa <- as.numeric(parsed$cost_bps_pa)
+  if (!is.null(parsed$hedge_mode)) state$hedge_mode <- as.character(parsed$hedge_mode)
+  if (!is.null(parsed$carry_overrides) && is.list(parsed$carry_overrides)) {
+    state$carry_overrides <- parsed$carry_overrides
+  }
+  if (!is.null(parsed$fx_spot_overrides) && is.list(parsed$fx_spot_overrides)) {
+    state$fx_spot_overrides <- parsed$fx_spot_overrides
+  }
+  if (!is.null(parsed$comparison_slots)) {
+    state$comparison_slots <- as.list(parsed$comparison_slots)
+  }
+  if (!is.null(parsed$active_assets)) {
+    act_list <- as.character(unlist(parsed$active_assets))
+    reg <- state$dataset
+    if (!is.null(reg) && !is.null(reg$meta)) {
+      reg$meta[Series_Type == "ASSET_TR", Active := Code %in% act_list]
+      state$universe <- order_asset_universe(act_list, reg$meta, base_ccy = state$base_currency)
+      state$dataset$active_assets <- state$universe
+    }
+  }
+}
+
+load_server_user_settings <- function(state) {
+  tryCatch({
+    # Skip automatic file load during testthat runs unless explicit file path is requested
+    if (isTRUE(tryCatch(testthat::is_testing(), error = function(...) FALSE)) && !nzchar(Sys.getenv("MAPS_USER_SETTINGS_FILE", ""))) {
+      return(FALSE)
+    }
+    fp <- get_user_settings_filepath()
+    if (!file.exists(fp)) return(FALSE)
+    txt <- paste(readLines(fp, warn = FALSE), collapse = "\n")
+    if (!nzchar(txt)) return(FALSE)
+    parsed <- jsonlite::fromJSON(txt, simplifyVector = FALSE)
+    if (!is.list(parsed)) return(FALSE)
+    apply_settings_to_state(state, parsed)
+    TRUE
+  }, error = function(e) {
+    warning(sprintf("Laden der User-Settings vom Server: %s", e$message))
+    FALSE
+  })
 }

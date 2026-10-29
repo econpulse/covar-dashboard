@@ -445,12 +445,14 @@ test_that("Portfolio save stores and restores hedge quotes across both ASSET_CLA
       name = "Custom Bullish CMA",
       scenario_id = "base_5y",
       asset_returns = list("MSSWITL(RI)" = 0.08),
-      carry_overrides = list("USD" = -0.01)
+      carry_overrides = list("USD" = -0.01),
+      fx_spot_overrides = list("USD" = -0.012)
     )
   ), st)
   expect_equal(resp_cma_save$status, "ok")
   expect_true("cma_custom_test" %in% names(st$custom_cma_sets))
   expect_equal(st$custom_cma_sets$cma_custom_test$name, "Custom Bullish CMA")
+  expect_equal(st$custom_cma_sets$cma_custom_test$fx_spot_overrides$USD, -0.012)
 
   resp_cma_del <- handle_app_command(list(
     protocol_version = 1L, request_id = "cma_d", type = "cma.delete",
@@ -458,4 +460,71 @@ test_that("Portfolio save stores and restores hedge quotes across both ASSET_CLA
   ), st)
   expect_equal(resp_cma_del$status, "ok")
   expect_false("cma_custom_test" %in% names(st$custom_cma_sets))
+})
+
+test_that("FX spot appreciation overrides, active assets portfolio persistence, and settings export/import work reliably", {
+  st <- create_session_state(TEST_CONFIG)
+  load_dataset_into_state(st, TEST_DATA_PATH)
+
+  # 1. Test fx_spot_overrides in scenarios.evaluate
+  resp_scen_fx <- handle_app_command(list(
+    protocol_version = 1L, request_id = "scen_fx", type = "scenarios.evaluate",
+    payload = list(
+      scenario_id = "base_5y",
+      carry_overrides = list(USD = -0.015),
+      fx_spot_overrides = list(USD = -0.02)
+    )
+  ), st)
+  expect_equal(resp_scen_fx$status, "ok")
+  expect_equal(st$fx_spot_overrides$USD, -0.02)
+  sc_eval <- resp_scen_fx$result$scenario_evaluation
+  usd_summary <- sc_eval$hedge_currency_summary[[which(vapply(sc_eval$hedge_currency_summary, function(x) identical(x$currency, "USD"), logical(1)))[1L]]]
+  expect_equal(usd_summary$avg_spot_return_pa, -0.02)
+  expect_true(isTRUE(usd_summary$is_spot_overridden))
+
+  # 2. Test saving portfolio with custom active_assets
+  active_subset <- c("CASH_CHF_TR", "MSSWITL(RI)", "BMUS10Y(RI)")
+  resp_save_act <- handle_app_command(list(
+    protocol_version = 1L, request_id = "save_act", type = "portfolio.save",
+    payload = list(
+      portfolio_id = "port_with_active",
+      name = "Portfolio mit aktiven Assets",
+      weights = list("MSSWITL(RI)" = 0.6, "BMUS10Y(RI)" = 0.4),
+      active_assets = active_subset
+    )
+  ), st)
+  expect_equal(resp_save_act$status, "ok")
+  expect_equal(unname(unlist(st$portfolios$port_with_active$active_assets)), active_subset)
+
+  # Toggle asset or switch portfolio and verify restoration
+  resp_eval_port <- handle_app_command(list(
+    protocol_version = 1L, request_id = "eval_act", type = "portfolio.evaluate",
+    payload = list(
+      portfolio_id = "port_with_active",
+      active_assets = active_subset
+    )
+  ), st)
+  expect_equal(resp_eval_port$status, "ok")
+  expect_true(all(active_subset %in% st$universe))
+  expect_false("GSGCTOT" %in% st$universe)
+
+  # 3. Test settings.export and settings.import
+  resp_export <- handle_app_command(list(
+    protocol_version = 1L, request_id = "exp_1", type = "settings.export"
+  ), st)
+  expect_equal(resp_export$status, "ok")
+  exported_settings <- resp_export$result$settings
+  expect_equal(exported_settings$schema_version, 2L)
+  expect_true("port_with_active" %in% names(exported_settings$custom_portfolios))
+
+  # Reset state and import settings
+  st_new <- create_session_state(TEST_CONFIG)
+  load_dataset_into_state(st_new, TEST_DATA_PATH)
+  resp_import <- handle_app_command(list(
+    protocol_version = 1L, request_id = "imp_1", type = "settings.import",
+    payload = list(settings = exported_settings)
+  ), st_new)
+  expect_equal(resp_import$status, "ok")
+  expect_true("port_with_active" %in% names(st_new$portfolios))
+  expect_equal(st_new$fx_spot_overrides$USD, -0.02)
 })
