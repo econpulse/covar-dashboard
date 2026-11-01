@@ -59,10 +59,19 @@ Rscript -e "shiny::runApp('app.R', port = 3838, launch.browser = TRUE)"
 - **Gold & Rohstoffe (`GSGCTOT`, `DJUBSTR`)**: Sind als `FUTURES_TR` (inkl. Collateral- und Roll-Ertrag) modelliert, nicht als physisches Gold. Ein USD-Hedge steuert ausschliesslich das kontraktuelle Index-Nominal.
 - **EUR-Cash-Proxy vor 1999 (`ECWGM1M`)**: Darf über die strukturierte Policy `allow_pre_1999_proxy` als bewusst gewählter historischer Proxy (vermutete DEM-/Euro-Mark-Herkunft) bis `1998-12-31` genutzt werden; ab 1999 entspricht die Reihe EUR. Bei Excess-Return-Analysen wird der Basiswährungs-Cashreturn genau **einmal** von jedem Assetreturn $u_{i,t}^B$ abgezogen und **nie** von den Hedgekomponenten $z_{C,t}^B$.
 
+### Forward-Looking 5-Jahres Monte-Carlo-Risikosimulation (Phase 1 & 2)
+- **Stochastische Pfade über 60 Monate**: Kombiniert die zukunftsgerichteten 5-Jahres-CMAs ($\mu_{\text{CMA}}$) mit der geschätzten autoritativen Kovarianzmatrix $\Sigma_B$ unter expliziten Rebalancing-Regeln (`ANNUAL_REBALANCED`, `MONTHLY_REBALANCED`, `BUY_AND_HOLD`).
+- **Simulationsmodelle**:
+  1. *Multivariate Student-t-Verteilung* (Standard, $\nu = 6$, bildet empirische Fat Tails und simultane Krisen-Kovarianzen realistisch ab).
+  2. *Multivariate Normalverteilung* (Gauß-Benchmark).
+  3. *Stationärer Block-Bootstrap* (resamplet historische Monatsblöcke und verschiebt den Mittelwert exakt auf $\mu_{\text{CMA}}$).
+- **Institutionelle Downside-Kennzahlen**: 5Y-Value-at-Risk (95%), 5Y-Expected Shortfall (CVaR 95%), maximaler Zwischen-Drawdown (Median und 95%-Worst) und Kapitalerhalt-Wahrscheinlichkeit $P(W_{60} \ge 100)$.
+- **Interaktiver ECharts-Quantilsfächer & Häufigkeitsverteilung**: Shaded Bands (P5–P95 und P25–P75), Median-Pfad P50, deterministischer Referenzpfad und empirische 5J-CAGR-Dichte.
+
 ### Noch nicht enthaltene spätere Ausbaustufen (gemäss Phasenplan)
-- **Numerische SAA-Optimierung**: Gemäss Abschnitt 1 ("Optimierung von SAAs ist eine spätere Funktion") liegt der Fokus auf exakter Bewertung, Risikozurechnung und Mehr-Portfolio-Vergleich.
-- **Konvexes Matrix-Ensemble**: Einzelmodelle (`Sample`, `Shrinkage Vollhistorie`, `Shrinkage 120M`, `EWMA 24M`, `Faktor-Momentenmodell`, `Krisen-Stress`) stehen bereit und werden im Tab `5. SAA-Vergleich & TE` nebeneinander gegenübergestellt; ein konvexes Mischgewicht über kompatible Matrizen kann darauf direkt aufsetzen.
-- **Stochastische Mehrjahres-Quantile**: Die 5-Jahres-Renditeszenarien sind gemäss Abschnitt 8 deterministische Rebalancingpfade (`Szenariorenditen`), ohne unfundierte Verlustwahrscheinlichkeiten.
+- **Numerische SAA-Optimierung**: Markowitz Mean-Variance-Frontier, Risk Parity / ERC und optimale Hedge-Quoten ($h^*$).
+- **Interaktiver CMA-Builder**: Makroökonomisches Bausteinmodell für Dividenden, Gewinnwachstum, Duration und Roll-Down.
+- **Konvexes Matrix-Ensemble**: Linearkombination kompatibler Matrizen ($\Sigma_{\text{mix}} = \sum \alpha_k \Sigma_k$).
 
 ---
 

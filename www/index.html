@@ -589,6 +589,87 @@
               </div>
             </div>
           </div>
+
+          <!-- Monte Carlo 5-Year Forward-Looking Risk Module -->
+          <div class="panel-card" style="margin-top: var(--space-4);">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Forward-Looking 5-Jahres Monte-Carlo-Risikosimulation</h2>
+                <div class="panel-subtitle">
+                  Stochastische 60-Monats-Pfade unter Berücksichtigung von Rebalancing, Fat Tails (Student-t) und der geschätzten Kovarianzmatrix &Sigma;<sub>B</sub>.
+                </div>
+              </div>
+              <div class="btn-toolbar">
+                <label for="select_mc_method" class="context-label" style="font-weight: 600;">Modell:</label>
+                <select id="select_mc_method" class="form-select">
+                  <option value="PARAMETRIC_STUDENT_T" selected>Multivariate Student-t (Fat Tails, df=6)</option>
+                  <option value="PARAMETRIC_GAUSSIAN">Multivariate Normalverteilung (Gauß)</option>
+                  <option value="BOOTSTRAP_MEAN_SHIFT">Block-Bootstrap (CMA-zentriert)</option>
+                </select>
+                <label for="select_mc_sims" class="context-label">Pfade:</label>
+                <select id="select_mc_sims" class="form-select">
+                  <option value="1000">1'000</option>
+                  <option value="2000" selected>2'000</option>
+                  <option value="5000">5'000</option>
+                </select>
+                <label for="input_mc_target_cagr" class="context-label">Zielrendite:</label>
+                <div style="display: flex; align-items: center; gap: 4px;">
+                  <input type="number" id="input_mc_target_cagr" class="form-control num-input" step="0.5" value="3.0" style="width: 65px;" aria-label="Zielrendite p.a. für Erfolgswahrscheinlichkeit">
+                  <span style="font-size: var(--text-xs); color: var(--text-secondary);">%</span>
+                </div>
+                <button type="button" id="btn_run_monte_carlo" class="btn btn-primary" title="Monte-Carlo-Simulation mit gewählten Parametern ausführen">
+                  Simulation berechnen
+                </button>
+              </div>
+            </div>
+
+            <!-- Monte Carlo Specific KPI Grid -->
+            <div class="kpi-grid" style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface-2, rgba(0,0,0,0.01));">
+              <div class="kpi-card">
+                <div class="kpi-label">5Y-Value-at-Risk (95% p.a.)</div>
+                <div id="mc_kpi_var95" class="kpi-value">-</div>
+                <div id="mc_kpi_var95_sub" class="kpi-sub">5%-Perzentil (Stress-Schwelle)</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">5Y-Expected Shortfall (CVaR 95%)</div>
+                <div id="mc_kpi_cvar95" class="kpi-value">-</div>
+                <div id="mc_kpi_cvar95_sub" class="kpi-sub">Erwarteter Verlust im 5%-Tail</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Kapitalerhalt (5J)</div>
+                <div id="mc_kpi_shortfall" class="kpi-value">-</div>
+                <div id="mc_kpi_shortfall_sub" class="kpi-sub">P(Endvermögen &ge; 100)</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Zielrendite-Erreichen</div>
+                <div id="mc_kpi_target" class="kpi-value">-</div>
+                <div id="mc_kpi_target_sub" class="kpi-sub">P(CAGR &ge; 3.0% p.a.)</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-label">Max. Zwischen-Drawdown</div>
+                <div id="mc_kpi_maxdd" class="kpi-value">-</div>
+                <div id="mc_kpi_maxdd_sub" class="kpi-sub">Median / 95%-Worst</div>
+              </div>
+            </div>
+
+            <!-- Fan Chart & Distribution Histogram -->
+            <div class="grid-equal" style="padding: var(--space-4);">
+              <div>
+                <div style="font-weight: 600; font-size: var(--text-sm); margin-bottom: 2px;">Quantilsfächer des Vermögens (Basis 100)</div>
+                <div style="font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: var(--space-2);">
+                  P5–P95 Bandbreite (hellblau), P25–P75 Kernbereich (blau), Median P50 (Linie) und deterministischer Referenzpfad
+                </div>
+                <div id="chart_mc_fan" class="chart-box" style="height: 380px;"></div>
+              </div>
+              <div>
+                <div style="font-weight: 600; font-size: var(--text-sm); margin-bottom: 2px;">Verteilung der 5-Jahres-CAGRs (p.a.)</div>
+                <div style="font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: var(--space-2);">
+                  Empirische Häufigkeitsverteilung mit Null-Rendite-Schwelle (rot) und 5%-VaR
+                </div>
+                <div id="chart_mc_dist" class="chart-box" style="height: 380px;"></div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- ================================================================

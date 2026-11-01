@@ -43,10 +43,20 @@ create_session_state <- function(config, shared_cache = NULL) {
   state$current_model <- NULL
   state$current_portfolio_eval <- NULL
   state$current_scenario_eval <- NULL
+  state$current_monte_carlo <- NULL
   state$current_comparison_eval <- NULL
   state$current_historical_path <- NULL
   state$current_validation <- NULL
   state$last_export <- NULL
+
+  # Forward-looking 5-year Monte Carlo configuration
+  state$monte_carlo_settings <- list(
+    n_sims = 2000L,
+    method = "PARAMETRIC_STUDENT_T",
+    df_t = 6.0,
+    seed = 42L,
+    target_cagr = 0.03
+  )
 
   # Job tracking for stale-response rejection
   state$latest_request_by_type <- list()

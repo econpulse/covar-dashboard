@@ -1226,6 +1226,76 @@ export function renderScenariosWorkspace(store, bridge) {
       clearAndAppend(tbody, rows);
     }
   }
+
+  // --------------------------------------------------------------------------
+  // Monte Carlo Simulation KPIs & Controls
+  // --------------------------------------------------------------------------
+  const mc = scEval.monte_carlo;
+  if (mc && mc.valid && mc.metrics_hedged) {
+    const mh = mc.metrics_hedged;
+    const cagrP05Pct = Number((Number(mh.cagr_p05 || 0) * 100).toFixed(2));
+    const var95Pct = Number((Number(mh.var_95_cagr || 0) * 100).toFixed(2));
+    const cvar95Pct = Number((Number(mh.cvar_95_cagr || 0) * 100).toFixed(2));
+    const capPreservPct = Number(((1.0 - Number(mh.shortfall_prob || 0)) * 100).toFixed(1));
+    const shortfallPct = Number((Number(mh.shortfall_prob || 0) * 100).toFixed(1));
+    const targetProbPct = Number((Number(mh.prob_achieve_target || 0) * 100).toFixed(1));
+    const targetGoalPct = Number((Number(mh.target_cagr || 0.03) * 100).toFixed(1));
+    const maxDdMedPct = Number((Number(mh.max_drawdown_median || 0) * 100).toFixed(1));
+    const maxDdP05Pct = Number((Number(mh.max_drawdown_p05 || 0) * 100).toFixed(1));
+
+    setTxt('mc_kpi_var95', `${var95Pct > 0 ? '-' : ''}${Math.abs(var95Pct).toFixed(2)} %`);
+    setTxt('mc_kpi_var95_sub', `P05 5J-CAGR: ${cagrP05Pct.toFixed(2)} % p.a.`);
+
+    setTxt('mc_kpi_cvar95', `${cvar95Pct > 0 ? '-' : ''}${Math.abs(cvar95Pct).toFixed(2)} %`);
+    setTxt('mc_kpi_cvar95_sub', 'Ø Verlust im schlechtesten 5%-Tail');
+
+    setTxt('mc_kpi_shortfall', `${capPreservPct.toFixed(1)} %`);
+    setTxt('mc_kpi_shortfall_sub', `Verlustrisiko nach 5J: ${shortfallPct.toFixed(1)} %`);
+
+    setTxt('mc_kpi_target', `${targetProbPct.toFixed(1)} %`);
+    setTxt('mc_kpi_target_sub', `P(CAGR ≥ ${targetGoalPct.toFixed(1)} % p.a.)`);
+
+    setTxt('mc_kpi_maxdd', `${maxDdMedPct.toFixed(1)} %`);
+    setTxt('mc_kpi_maxdd_sub', `Worst 5% MaxDD: ${maxDdP05Pct.toFixed(1)} %`);
+
+    // Controls sync
+    const selMethod = document.getElementById('select_mc_method');
+    if (selMethod && document.activeElement !== selMethod) {
+      selMethod.value = mc.method || st.monte_carlo_settings?.method || 'PARAMETRIC_STUDENT_T';
+    }
+    const selSims = document.getElementById('select_mc_sims');
+    if (selSims && document.activeElement !== selSims) {
+      selSims.value = String(mc.n_sims || st.monte_carlo_settings?.n_sims || 2000);
+    }
+    const inputTarget = document.getElementById('input_mc_target_cagr');
+    if (inputTarget && document.activeElement !== inputTarget) {
+      inputTarget.value = targetGoalPct.toFixed(1);
+    }
+  }
+
+  const btnRunMc = document.getElementById('btn_run_monte_carlo');
+  if (btnRunMc) {
+    btnRunMc.textContent = 'Simulation berechnen';
+    btnRunMc.disabled = false;
+    if (!btnRunMc.__hasClickListener) {
+      btnRunMc.__hasClickListener = true;
+      btnRunMc.addEventListener('click', () => {
+        const method = document.getElementById('select_mc_method')?.value || 'PARAMETRIC_STUDENT_T';
+        const nSims = Number(document.getElementById('select_mc_sims')?.value || 2000);
+        const targetCagr = Number(document.getElementById('input_mc_target_cagr')?.value || 3.0) / 100.0;
+        st.monte_carlo_settings = { method, n_sims: nSims, target_cagr: targetCagr };
+        btnRunMc.textContent = 'Berechne …';
+        btnRunMc.disabled = true;
+        bridge.sendCommand('monte_carlo.simulate', {
+          method,
+          n_sims: nSims,
+          target_cagr: targetCagr,
+          scenario_id: st.active_scenario_id,
+          rebalancing_rule: st.rebalancing_rule
+        });
+      });
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------

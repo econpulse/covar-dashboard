@@ -30,6 +30,7 @@ r_modules <- c(
   "portfolio_metrics.R",
   "expectations_adapter.R",
   "scenario_paths.R",
+  "monte_carlo.R",
   "validation.R",
   "exports.R",
   "cache_jobs.R",

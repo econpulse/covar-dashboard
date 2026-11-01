@@ -164,6 +164,10 @@ function renderActiveTabCharts() {
     charts.renderRiskContributionsChart('chart_risk_contributions', decompItems, idField);
   } else if (tab === 'returns' && sc) {
     charts.renderScenarioPathChart('chart_scenario_paths', sc.yearly_path || [], st.base_currency);
+    if (sc.monte_carlo) {
+      charts.renderMonteCarloFanChart('chart_mc_fan', sc.monte_carlo.fan_chart_path || [], st.base_currency);
+      charts.renderMonteCarloDistributionChart('chart_mc_dist', sc.monte_carlo.cagr_histogram_hedged || [], sc.monte_carlo.metrics_hedged, st.base_currency);
+    }
   } else if (tab === 'comparison' && comp) {
     const activeSelected = (st.comparison_slots || []).filter(id => id && id.trim() !== '');
     charts.renderComparisonChart('chart_comparison_models', comp.cross_model_comparison || [], activeSelected);

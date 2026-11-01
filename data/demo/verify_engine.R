@@ -7,7 +7,7 @@ for (f in c("app_config.R", "data_import.R", "metadata.R", "fx_quotes.R",
             "return_transforms.R", "cash_returns.R", "risk_basis.R",
             "risk_diagnostics.R", "missing_history.R", "covariance_estimators.R",
             "exposures.R", "portfolio_metrics.R", "expectations_adapter.R",
-            "scenario_paths.R", "validation.R", "exports.R",
+            "scenario_paths.R", "monte_carlo.R", "validation.R", "exports.R",
             "cache_jobs.R", "session_state.R", "server_commands.R")) {
   source(file.path("R", f), local = FALSE)
 }

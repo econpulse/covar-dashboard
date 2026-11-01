@@ -417,4 +417,211 @@ export class EChartsManager {
       series: series
     }, { replaceMerge: ['series'] });
   }
+
+  renderMonteCarloFanChart(containerId, fanData, baseCcy) {
+    const inst = this.getOrCreate(containerId);
+    if (!inst || !Array.isArray(fanData) || fanData.length === 0) return;
+
+    const labels = fanData.map(r => r.label);
+    const p05 = fanData.map(r => Number(r.hedged_p05));
+    const p25 = fanData.map(r => Number(r.hedged_p25));
+    const p50 = fanData.map(r => Number(r.hedged_p50));
+    const p75 = fanData.map(r => Number(r.hedged_p75));
+    const p95 = fanData.map(r => Number(r.hedged_p95));
+    const detH = fanData.map(r => Number(r.deterministic_hedged));
+    const unh50 = fanData.map(r => Number(r.unhedged_p50));
+
+    // Stacking diffs for bands
+    const diff90 = p95.map((v, i) => Number((v - p05[i]).toFixed(2)));
+    const diff50 = p75.map((v, i) => Number((v - p25[i]).toFixed(2)));
+
+    inst.setOption({
+      animation: false,
+      tooltip: citrixSafeTooltip({
+        trigger: 'axis',
+        formatter: params => {
+          if (!params || params.length === 0) return '';
+          const idx = params[0].dataIndex;
+          const row = fanData[idx];
+          if (!row) return '';
+          return `
+            <div style="font-size: 11px; line-height: 1.5;">
+              <div style="font-weight: 700; margin-bottom: 4px; border-bottom: 1px solid rgba(0,0,0,0.1); padding-bottom: 2px;">
+                ${row.label} (${row.year} Jahre)
+              </div>
+              <div><span style="color: #60a5fa;">■</span> P95 (Optimistisch): <b>${Number(row.hedged_p95).toFixed(1)}</b></div>
+              <div><span style="color: #2563eb;">■</span> P75 (Kern oben): <b>${Number(row.hedged_p75).toFixed(1)}</b></div>
+              <div><span style="color: #1d4ed8;">●</span> <b>Median P50: ${Number(row.hedged_p50).toFixed(1)}</b></div>
+              <div><span style="color: #2563eb;">■</span> P25 (Kern unten): <b>${Number(row.hedged_p25).toFixed(1)}</b></div>
+              <div><span style="color: #60a5fa;">■</span> P05 (95%-Stress): <b>${Number(row.hedged_p05).toFixed(1)}</b></div>
+              <div style="margin-top: 4px; padding-top: 3px; border-top: 1px dashed rgba(0,0,0,0.1);">
+                <span style="color: #059669;">┄</span> Deterministisch: <b>${Number(row.deterministic_hedged).toFixed(1)}</b><br/>
+                <span style="color: #dc2626;">┈</span> Ungesichert P50: <b>${Number(row.unhedged_p50).toFixed(1)}</b>
+              </div>
+            </div>
+          `;
+        }
+      }),
+      legend: {
+        data: ['P5 – P95 Bandbreite (90%)', 'P25 – P75 Kernbereich (50%)', `Median P50 (${baseCcy})`, 'Deterministischer CMA-Pfad', `Median ungesichert (${baseCcy})`],
+        top: 4,
+        textStyle: { fontSize: 11 }
+      },
+      grid: { left: 52, right: 24, top: 40, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        data: labels,
+        axisLabel: {
+          fontSize: 10,
+          interval: (idx, val) => idx === 0 || idx % 12 === 0 || idx === fanData.length - 1
+        }
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        axisLabel: { fontSize: 11, formatter: '{value}' }
+      },
+      series: [
+        // Band 90 base (invisible)
+        {
+          name: 'band90_base',
+          type: 'line',
+          stack: 'band90',
+          data: p05,
+          lineStyle: { opacity: 0 },
+          itemStyle: { opacity: 0 },
+          showSymbol: false,
+          tooltip: { show: false }
+        },
+        // Band 90 fill
+        {
+          name: 'P5 – P95 Bandbreite (90%)',
+          type: 'line',
+          stack: 'band90',
+          data: diff90,
+          lineStyle: { opacity: 0 },
+          areaStyle: { color: 'rgba(59, 130, 246, 0.16)' },
+          showSymbol: false
+        },
+        // Band 50 base (invisible)
+        {
+          name: 'band50_base',
+          type: 'line',
+          stack: 'band50',
+          data: p25,
+          lineStyle: { opacity: 0 },
+          itemStyle: { opacity: 0 },
+          showSymbol: false,
+          tooltip: { show: false }
+        },
+        // Band 50 fill
+        {
+          name: 'P25 – P75 Kernbereich (50%)',
+          type: 'line',
+          stack: 'band50',
+          data: diff50,
+          lineStyle: { opacity: 0 },
+          areaStyle: { color: 'rgba(37, 99, 235, 0.28)' },
+          showSymbol: false
+        },
+        // Median P50 line
+        {
+          name: `Median P50 (${baseCcy})`,
+          type: 'line',
+          data: p50,
+          lineStyle: { width: 2.8, color: '#1d4ed8' },
+          itemStyle: { color: '#1d4ed8' },
+          showSymbol: false,
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: '#94a3b8', type: 'dashed' },
+            data: [{ yAxis: 100, label: { formatter: 'Kapitalerhalt (100)', position: 'insideEndTop', fontSize: 10 } }]
+          }
+        },
+        // Deterministic CMA scenario line
+        {
+          name: 'Deterministischer CMA-Pfad',
+          type: 'line',
+          data: detH,
+          lineStyle: { width: 2.0, type: 'dashed', color: '#059669' },
+          itemStyle: { color: '#059669' },
+          showSymbol: false
+        },
+        // Unhedged median line
+        {
+          name: `Median ungesichert (${baseCcy})`,
+          type: 'line',
+          data: unh50,
+          lineStyle: { width: 1.6, type: 'dotted', color: '#dc2626' },
+          itemStyle: { color: '#dc2626' },
+          showSymbol: false
+        }
+      ]
+    }, true);
+  }
+
+  renderMonteCarloDistributionChart(containerId, histData, metrics, baseCcy) {
+    const inst = this.getOrCreate(containerId);
+    if (!inst || !histData || !Array.isArray(histData) || histData.length === 0) return;
+
+    const xLabels = histData.map(r => `${(Number(r.mid) * 100).toFixed(1)}%`);
+
+    inst.setOption({
+      animation: false,
+      tooltip: citrixSafeTooltip({
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: params => {
+          if (!params || params.length === 0) return '';
+          const idx = params[0].dataIndex;
+          const row = histData[idx];
+          return `
+            <div style="font-size: 11px;">
+              <b>5J-CAGR: ${(Number(row.mid) * 100).toFixed(2)}% p.a.</b><br/>
+              Häufigkeit: <b>${row.pct}%</b> (${row.count} Pfade)
+            </div>
+          `;
+        }
+      }),
+      grid: { left: 45, right: 20, top: 32, bottom: 42 },
+      xAxis: {
+        type: 'category',
+        data: xLabels,
+        axisLabel: { fontSize: 9, rotate: 30, interval: 2 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { formatter: '{value}%', fontSize: 10 }
+      },
+      series: [
+        {
+          name: 'Häufigkeit',
+          type: 'bar',
+          data: histData.map(r => ({
+            value: Number(r.pct || 0),
+            itemStyle: {
+              color: Number(r.mid) < 0 ? '#f87171' : '#3b82f6'
+            }
+          })),
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            data: [
+              {
+                name: 'Nullrendite',
+                xAxis: xLabels.reduce((closest, curr, i) => {
+                  const val = parseFloat(curr);
+                  const closestVal = parseFloat(xLabels[closest]);
+                  return Math.abs(val) < Math.abs(closestVal) ? i : closest;
+                }, 0),
+                lineStyle: { color: '#ef4444', width: 2, type: 'solid' },
+                label: { formatter: '0% p.a.', position: 'end', fontSize: 10, color: '#ef4444' }
+              }
+            ]
+          }
+        }
+      ]
+    }, true);
+  }
 }

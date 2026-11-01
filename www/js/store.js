@@ -25,6 +25,12 @@ export class AppStore {
       active_cma_set_id: 'cma_base',
       custom_cma_sets: {},
       carry_overrides: {},
+      fx_spot_overrides: {},
+      monte_carlo_settings: {
+        method: 'PARAMETRIC_STUDENT_T',
+        n_sims: 2000,
+        target_cagr: 0.03
+      },
       hedge_mode: 'ASSET_CLASS',
       hedge_configs: {
         ASSET_CLASS: { mode: 'ASSET_CLASS', class_ratios: {}, asset_overrides: {} },

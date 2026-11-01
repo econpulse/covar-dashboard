@@ -416,6 +416,64 @@ run_full_evaluation_pipeline <- function(state,
   scen_eval <- scen_res$value
   state$current_scenario_eval <- scen_eval
 
+  # Evaluate forward-looking 5-year Monte Carlo risk simulation
+  mc_settings <- state$monte_carlo_settings %||% list(
+    n_sims = 2000L,
+    method = "PARAMETRIC_STUDENT_T",
+    df_t = 6.0,
+    seed = 42L,
+    target_cagr = 0.03
+  )
+
+  mc_res <- cache$get_or_compute(
+    tier = "monte_carlo",
+    key_parts = list(
+      basis_id = basis$basis_id,
+      model_id = model$model_id,
+      model_hash = model$model_hash,
+      expectations_id = state$expectations$expectations_id,
+      scenario_id = scenario_id,
+      base_currency = base_ccy,
+      weights = round(w_vec, 10),
+      hedge_config = hc,
+      rebalancing_rule = rebalancing_rule,
+      cost_bps_pa = state$cost_bps_pa,
+      carry_overrides = state$carry_overrides,
+      fx_spot_overrides = state$fx_spot_overrides,
+      n_sims = mc_settings$n_sims,
+      method = mc_settings$method,
+      df_t = mc_settings$df_t,
+      seed = mc_settings$seed,
+      target_cagr = mc_settings$target_cagr
+    ),
+    counter_name = "monte_carlo_simulations",
+    compute_fn = function() {
+      simulate_cma_paths(
+        expectations = state$expectations,
+        model = model,
+        weights = w_vec,
+        hedge_config = hc,
+        meta = state$dataset$meta,
+        base_ccy = base_ccy,
+        scenario_id = scenario_id,
+        rebalancing_rule = rebalancing_rule,
+        n_sims = mc_settings$n_sims,
+        horizon_years = as.integer(state$expectations$horizon %||% 5L),
+        method = mc_settings$method,
+        df_t = mc_settings$df_t,
+        seed = mc_settings$seed,
+        cost_bps_pa = state$cost_bps_pa,
+        carry_overrides = state$carry_overrides,
+        fx_spot_overrides = state$fx_spot_overrides,
+        available_hedge_currencies = model$supported_hedge_currencies %||% model$available_hedge_currencies,
+        target_cagr = mc_settings$target_cagr,
+        basis = basis
+      )
+    }
+  )
+  mc_eval <- mc_res$value
+  state$current_monte_carlo <- mc_eval
+
   # Multi-SAA & multi-model comparison: include both configured/hedged and unhedged (0%) variant for every portfolio
   unhedged_ratios <- list(CHF = 0, EUR = 0, USD = 0, GBP = 0, JPY = 0)
   port_ids <- names(state$portfolios)
@@ -491,9 +549,10 @@ run_full_evaluation_pipeline <- function(state,
     portfolio_eval = port_eval,
     historical_path = hist_path,
     scenario_eval = scen_eval,
+    monte_carlo_eval = mc_eval,
     comparison_eval = comp_eval,
     cache_stats = cache$get_stats(),
-    issues = unique(c( state$dataset$issues, model$issues, port_eval$issues, scen_eval$issues ))
+    issues = unique(c( state$dataset$issues, model$issues, port_eval$issues, scen_eval$issues, mc_eval$issues ))
   )
 }
 
@@ -545,7 +604,10 @@ build_full_client_payload <- function(state, pipeline_res, include_static_contex
         fx_spot_overrides = state$fx_spot_overrides,
         relevant_hedge_currencies = scen_eval$relevant_hedge_currencies,
         available_hedge_currencies = scen_eval$available_hedge_currencies,
-        hedge_currency_summary = scen_eval$hedge_currency_summary
+        hedge_currency_summary = scen_eval$hedge_currency_summary,
+        monte_carlo = if (!is.null(pipeline_res$monte_carlo_eval) && isTRUE(pipeline_res$monte_carlo_eval$valid)) {
+          pipeline_res$monte_carlo_eval
+        } else NULL
       )
     } else NULL,
       comparison = if (!is.null(comp_eval) && isTRUE(comp_eval$valid)) {
@@ -1060,6 +1122,40 @@ handle_app_command <- function(request, state) {
 
     scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
     rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
+    res <- run_full_evaluation_pipeline(
+      state = state,
+      scenario_id = scen_id,
+      rebalancing_rule = rebal
+    )
+    return(build_response_envelope(
+      request = request,
+      state = state,
+      status = if (isTRUE(res$valid)) "ok" else "error",
+      result = build_full_client_payload(state, res),
+      issues = res$issues
+    ))
+  }
+
+  if (identical(cmd_type, "monte_carlo.simulate")) {
+    if (!is.null(payload$n_sims)) {
+      state$monte_carlo_settings$n_sims <- as.integer(payload$n_sims)
+    }
+    if (!is.null(payload$method)) {
+      state$monte_carlo_settings$method <- as.character(payload$method)
+    }
+    if (!is.null(payload$df_t)) {
+      state$monte_carlo_settings$df_t <- as.numeric(payload$df_t)
+    }
+    if (!is.null(payload$seed)) {
+      state$monte_carlo_settings$seed <- as.integer(payload$seed)
+    }
+    if (!is.null(payload$target_cagr)) {
+      state$monte_carlo_settings$target_cagr <- as.numeric(payload$target_cagr)
+    }
+
+    scen_id <- as.character(payload$scenario_id %||% state$active_scenario_id)
+    rebal <- as.character(payload$rebalancing_rule %||% state$rebalancing_rule)
+
     res <- run_full_evaluation_pipeline(
       state = state,
       scenario_id = scen_id,
